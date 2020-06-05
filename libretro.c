@@ -1,4 +1,4 @@
-#include "libretro.h"
+﻿#include "libretro.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -391,11 +391,11 @@ void retro_set_environment(retro_environment_t cb)
       { 0 },
    };
    static const struct retro_variable vars[] = {
-      { "fmsx_mode", "MSX Mode; MSX2+|MSX1|MSX2" },
-      { "fmsx_video_mode", "MSX Video Mode; NTSC|PAL" },
-      { "fmsx_mapper_type_mode", "MSX Mapper Type Mode; Guess Mapper Type A|Guess Mapper Type B" },
-      { "fmsx_ram_pages", "MSX Main Memory; Auto|64KB|128KB|256KB|512KB" },
-      { "fmsx_vram_pages", "MSX Video Memory; Auto|32KB|64KB|128KB|192KB" },
+      { "fmsx_mode", "MSX型号; MSX2+|MSX1|MSX2" },
+      { "fmsx_video_mode", "MSX视频制式; NTSC|PAL" },
+      { "fmsx_mapper_type_mode", "MSX Mapper类型; 推测Mapper类型A|推测Mapper类型B" },
+      { "fmsx_ram_pages", "MSX主内存大小; 自动|64KB|128KB|256KB|512KB" },
+      { "fmsx_vram_pages", "MSX视频内存大小; 自动|32KB|64KB|128KB|192KB" },
       { NULL, NULL },
    };
 
@@ -538,7 +538,7 @@ static void check_variables(void)
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
-      if (strcmp(var.value, "Auto") == 0)
+      if (strcmp(var.value, "自动") == 0)
          RAMPages = ModeRAM;
       else if (strcmp(var.value, "64KB") == 0)
          RAMPages = 4;
@@ -559,7 +559,7 @@ static void check_variables(void)
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
-      if (strcmp(var.value, "Auto") == 0)
+      if (strcmp(var.value, "自动") == 0)
          VRAMPages = ModeVRAM;
       else if (strcmp(var.value, "32KB") == 0)
          VRAMPages = 2;
