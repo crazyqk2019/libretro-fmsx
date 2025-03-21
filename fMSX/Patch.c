@@ -6,26 +6,30 @@
 /** routines. Note that the disk I/O patches are optional,  **/
 /** as there is a proper WD1793 FDC emulation now.          **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1994-2014                 **/
+/** Copyright (C) Marat Fayzullin 1994-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 
+#include "libretro.h"
+
 #include "MSX.h"
 #include "Boot.h"
-#include <stdio.h>
+
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
 
-void SSlot(byte Value); /* Used to switch secondary slots */
-void PSlot(byte Value); /* Used to switch primary slots   */
+#include <streams/file_stream_transforms.h>
+
+void SSlot(uint8_t Value); /* Used to switch secondary slots */
+void PSlot(uint8_t Value); /* Used to switch primary slots   */
 
 /** DiskPresent() ********************************************/
 /** Return 1 if disk drive with a given ID is present.      **/
 /*************************************************************/
-byte DiskPresent(byte ID)
+uint8_t DiskPresent(uint8_t ID)
 {
   return((ID<MAXDRIVES)&&FDD[ID].Data);
 }
@@ -33,18 +37,14 @@ byte DiskPresent(byte ID)
 /** DiskRead() ***********************************************/
 /** Read requested sector from the drive into a buffer.     **/
 /*************************************************************/
-byte DiskRead(byte ID,byte *Buf,int N)
+uint8_t DiskRead(uint8_t ID,uint8_t *Buf,int N)
 {
-  int Side,Track,Sector;
-  byte *P;
+  uint8_t *P;
 
   if(ID<MAXDRIVES)
   {
-    /* Compute side,track,sector and get data pointer */
-    Sector = N%FDD[ID].Sectors;
-    Track  = N/FDD[ID].Sectors/FDD[ID].Sides;
-    Side   = (N/FDD[ID].Sectors)%FDD[ID].Sides;
-    P      = SeekFDI(&FDD[ID],Side,Track,Side,Track,Sector+1);
+    /* Get data pointer to requested sector */
+    P = LinearFDI(&FDD[ID],N);
     /* If seek operation succeeded, read sector */
     if(P) memcpy(Buf,P,FDD[ID].SecSize);
     /* Done */
@@ -58,20 +58,20 @@ byte DiskRead(byte ID,byte *Buf,int N)
 /** Write contents of the buffer into a given sector of the **/
 /** disk.                                                   **/
 /*************************************************************/
-byte DiskWrite(byte ID,const byte *Buf,int N)
+uint8_t DiskWrite(uint8_t ID,const uint8_t *Buf,int N)
 {
-  int Side,Track,Sector;
-  byte *P;
+  uint8_t *P;
 
   if(ID<MAXDRIVES)
   {
-    /* Compute side,track,sector and get data pointer */
-    Sector = N%FDD[ID].Sectors;
-    Track  = N/FDD[ID].Sectors/FDD[ID].Sides;
-    Side   = (N/FDD[ID].Sectors)%FDD[ID].Sides;
-    P      = SeekFDI(&FDD[ID],Side,Track,Side,Track,Sector+1);
+    /* Get data pointer to requested sector */
+    P = LinearFDI(&FDD[ID],N);
     /* If seek operation succeeded, write sector */
-    if(P) memcpy(P,Buf,FDD[ID].SecSize);
+    if(P)
+    {
+      memcpy(P,Buf,FDD[ID].SecSize);
+      FDD[ID].Dirty = 1;
+    }
     /* Done */
     return(!!P);
   }
@@ -85,10 +85,10 @@ byte DiskWrite(byte ID,const byte *Buf,int N)
 /*************************************************************/
 void PatchZ80(Z80 *R)
 {
-  static const byte TapeHeader[8] = { 0x1F,0xA6,0xDE,0xBA,0xCC,0x13,0x7D,0x74 };
+  static const uint8_t TapeHeader[8] = { 0x1F,0xA6,0xDE,0xBA,0xCC,0x13,0x7D,0x74 };
 
   static const struct
-  { int Sectors;byte Heads,Names,PerTrack,PerFAT,PerCluster; }
+  { int Sectors;uint8_t Heads,Names,PerTrack,PerFAT,PerCluster; }
   Info[8] =
   {
     {  720,1,112,9,2,2 },
@@ -101,9 +101,9 @@ void PatchZ80(Z80 *R)
     {  640,2,112,8,1,2 }
   };
 
-  byte Buf[512],Count,PS,SS,N,*P;
+  uint8_t Buf[512],Count,PS,SS,N,*P;
   int J,I,Sector;
-  word Addr;
+  uint16_t Addr;
 
   switch(R->PC.W-2)
   {
@@ -125,14 +125,6 @@ case 0x4010:
 *** 6 Seek error                                              ***
 ****************************************************************/
 {
-  if(Verbose&0x04)
-    printf
-    (
-      "%s DISK %c: %d sectors starting from %04Xh [buffer at %04Xh]\n",
-      R->AF.B.l&C_FLAG? "WRITE":"READ",R->AF.B.h+'A',R->BC.B.h,
-      R->DE.W,R->HL.W
-    );
-
   R->IFF|=1;
   Addr  = R->HL.W;
   Count = R->BC.B.h;
@@ -205,8 +197,6 @@ case 0x4013:
 *** media descriptor and transfer a new DPB as with GETDPB.   ***
 ****************************************************************/
 {
-  if(Verbose&0x04) printf("CHECK DISK %c\n",R->AF.B.h+'A');
-
   R->IFF|=1;
 
   /* If no disk, return "Not ready": */
@@ -373,30 +363,25 @@ case 0x00E1:
 {
   long Pos;
 
-  if(Verbose&0x04) printf("TAPE: Looking for header...");
-
   R->AF.B.l|=C_FLAG;
   if(CasStream)
   {
-    Pos=ftell(CasStream);
+    Pos=rftell(CasStream);
     if(Pos&7)
-      if(fseek(CasStream,8-(Pos&7),SEEK_CUR))
+      if(rfseek(CasStream,8-(Pos&7),SEEK_CUR))
       {
-        if(Verbose&0x04) puts("FAILED");
-        rewind(CasStream);return;
+        filestream_rewind(CasStream);return;
       }
 
-    while(fread(Buf,1,8,CasStream)==8)
+    while(rfread(Buf,1,8,CasStream)==8)
       if(!memcmp(Buf,TapeHeader,8))
       {
-        if(Verbose&0x04) puts("OK");
         R->AF.B.l&=~C_FLAG;return;
       }
 
-    rewind(CasStream);
+    filestream_rewind(CasStream);
   }
 
-  if(Verbose&0x04) puts("FAILED");
   return;
 }
 
@@ -408,8 +393,8 @@ case 0x00E4:
 
   if(CasStream)
   {
-    J=fgetc(CasStream);
-    if(J<0) rewind(CasStream);
+    J=rfgetc(CasStream);
+    if(J<0) filestream_rewind(CasStream);
     else { R->AF.B.h=J;R->AF.B.l&=~C_FLAG; }
   }
 
@@ -432,12 +417,12 @@ case 0x00EA:
 
   if(CasStream)
   {
-    Pos=ftell(CasStream);
+    Pos=rftell(CasStream);
     if(Pos&7)
-      if(fseek(CasStream,8-(Pos&7),SEEK_CUR))
+      if(rfseek(CasStream,8-(Pos&7),SEEK_CUR))
       { R->AF.B.l|=C_FLAG;return; }
 
-    fwrite(TapeHeader,1,8,CasStream);
+    rfwrite(TapeHeader,1,8,CasStream);
     R->AF.B.l&=~C_FLAG;
   }   
 
@@ -451,7 +436,7 @@ case 0x00ED:
 
   if(CasStream)
   {
-    fputc(R->AF.B.h,CasStream);
+    rfputc(R->AF.B.h,CasStream);
     R->AF.B.l&=~C_FLAG;
   }
 
@@ -470,7 +455,6 @@ case 0x00F3:
   return;
 
 default:
-  printf("Unknown BIOS trap called at PC=%04Xh\n",R->PC.W-2);
-
+  break;
   }
 }

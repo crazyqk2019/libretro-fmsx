@@ -6,20 +6,24 @@
 /** controller produced by Western Digital. See WD1793.h    **/
 /** for declarations.                                       **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2005-2014                 **/
+/** Copyright (C) Marat Fayzullin 2005-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 #include "WD1793.h"
-#include <stdio.h>
+
+#include "libretro.h"
+extern retro_log_printf_t log_cb;
+
+#include <string.h>
 
 /** Reset1793() **********************************************/
 /** Reset WD1793. When Disks=WD1793_INIT, also initialize   **/
 /** disks. When Disks=WD1793_EJECT, eject inserted disks,   **/
 /** freeing memory.                                         **/
 /*************************************************************/
-void Reset1793(register WD1793 *D,FDIDisk *Disks,register byte Eject)
+void Reset1793(WD1793 *D,FDIDisk *Disks,uint8_t Eject)
 {
   int J;
 
@@ -35,13 +39,16 @@ void Reset1793(register WD1793 *D,FDIDisk *Disks,register byte Eject)
   D->WRLength = 0;
   D->RDLength = 0;
   D->Wait     = 0;
+  D->Cmd      = 0xD0;
+  D->Rsrvd2   = 0;
 
   /* For all drives... */
-  for(J=0;J<4;++J)
+  for(J=0;J<NUM_FDI_DRIVES;++J)
   {
     /* Reset drive-dependent state */
     D->Disk[J]  = Disks? &Disks[J]:0;
     D->Track[J] = 0;
+    D->Rsrvd1[J] = 0;
     /* Initialize disk structure, if requested */
     if((Eject==WD1793_INIT)&&D->Disk[J])  InitFDI(D->Disk[J]);
     /* Eject disk image, if requested */
@@ -49,11 +56,35 @@ void Reset1793(register WD1793 *D,FDIDisk *Disks,register byte Eject)
   }
 }
 
+/** Save1793() ***********************************************/
+/** Save WD1793 state to a given buffer of given maximal    **/
+/** size. Returns number of bytes saved or 0 on failure.    **/
+/*************************************************************/
+unsigned int Save1793(const WD1793 *D,uint8_t *Buf,unsigned int Size)
+{
+  unsigned int N = (const uint8_t *)&(D->Ptr) - (const uint8_t *)D;
+  if(N>Size) return(0);
+  memcpy(Buf,D,N);
+  return(N);
+}
+
+/** Load1793() ***********************************************/
+/** Load WD1793 state from a given buffer of given maximal  **/
+/** size. Returns number of bytes loaded or 0 on failure.   **/
+/*************************************************************/
+unsigned int Load1793(WD1793 *D,uint8_t *Buf,unsigned int Size)
+{
+  unsigned int N = (const uint8_t *)&(D->Ptr) - (const uint8_t *)D;
+  if(N>Size) return(0);
+  memcpy(D,Buf,N);
+  return(N);
+}
+
 /** Read1793() ***********************************************/
 /** Read value from a WD1793 register A. Returns read data  **/
 /** on success or 0xFF on failure (bad register address).   **/
 /*************************************************************/
-byte Read1793(register WD1793 *D,register byte A)
+uint8_t Read1793(WD1793 *D,uint8_t A)
 {
   switch(A)
   {
@@ -61,8 +92,16 @@ byte Read1793(register WD1793 *D,register byte A)
       A=D->R[0];
       /* If no disk present, set F_NOTREADY */
       if(!D->Disk[D->Drive]||!D->Disk[D->Drive]->Data) A|=F_NOTREADY;
+      if((D->Cmd<0x80)||(D->Cmd==0xD0))
+      {
+        /* Keep flipping F_INDEX bit as the disk rotates (Sam Coupe) */
+        D->R[0]=(D->R[0]^F_INDEX)&(F_INDEX|F_BUSY|F_NOTREADY|F_READONLY|F_TRACK0);
+      }
+      else
+      {
       /* When reading status, clear all bits but F_BUSY and F_NOTREADY */
-      D->R[0]&=F_BUSY|F_NOTREADY;
+        D->R[0]&=F_BUSY|F_NOTREADY|F_READONLY|F_DRQ;
+      }
       return(A);
     case WD1793_TRACK:
     case WD1793_SECTOR:
@@ -70,9 +109,7 @@ byte Read1793(register WD1793 *D,register byte A)
       return(D->R[A]);
     case WD1793_DATA:
       /* When reading data, load value from disk */
-      if(!D->RDLength)
-      { if(D->Verbose) printf("WD1793: EXTRA DATA READ\n"); }
-      else
+      if(D->RDLength)
       {
         /* Read data */
         D->R[A]=*D->Ptr++;
@@ -87,7 +124,6 @@ byte Read1793(register WD1793 *D,register byte A)
         else
         {
           /* Read completed */
-          if(D->Verbose) printf("WD1793: READ COMPLETED\n");
           D->R[0]&= ~(F_DRQ|F_BUSY);
           D->IRQ  = WD1793_IRQ;
         }
@@ -98,7 +134,6 @@ byte Read1793(register WD1793 *D,register byte A)
       if(D->Wait)
         if(!--D->Wait)
         {
-          if(D->Verbose) printf("WD1793: COMMAND TIMED OUT\n");
           D->RDLength=D->WRLength=0;
           D->R[0] = (D->R[0]&~(F_DRQ|F_BUSY))|F_LOSTDATA;
           D->IRQ  = WD1793_IRQ;
@@ -115,7 +150,7 @@ byte Read1793(register WD1793 *D,register byte A)
 /** Write value V into WD1793 register A. Returns DRQ/IRQ   **/
 /** values.                                                 **/
 /*************************************************************/
-byte Write1793(register WD1793 *D,register byte A,register byte V)
+uint8_t Write1793(WD1793 *D,uint8_t A,uint8_t V)
 {
   int J;
 
@@ -127,12 +162,12 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
       /* If it is FORCE-IRQ command... */
       if((V&0xF0)==0xD0)
       {
-        if(D->Verbose) printf("WD1793: FORCE-INTERRUPT (%02Xh)\n",V);
         /* Reset any executing command */
         D->RDLength=D->WRLength=0;
+        D->Cmd=0xD0;
         /* Either reset BUSY flag or reset all flags if BUSY=0 */
         if(D->R[0]&F_BUSY) D->R[0]&=~F_BUSY;
-        else               D->R[0]=D->Track[D->Drive]? 0:F_TRACK0;
+        else               D->R[0]=(D->Track[D->Drive]? 0:F_TRACK0)|F_INDEX;
         /* Cause immediate interrupt if requested */
         if(V&C_IRQ) D->IRQ=WD1793_IRQ;
         /* Done */
@@ -142,11 +177,11 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
       if(D->R[0]&F_BUSY) break;
       /* Reset status register */
       D->R[0]=0x00;
+      D->Cmd=V;
       /* Depending on the command... */
       switch(V&0xF0)
       {
         case 0x00: /* RESTORE (seek track 0) */
-          if(D->Verbose) printf("WD1793: RESTORE-TRACK-0 (%02Xh)\n",V);
           D->Track[D->Drive]=0;
           D->R[0] = F_INDEX|F_TRACK0|(V&C_LOADHEAD? F_HEADLOAD:0);
           D->R[1] = 0;
@@ -154,7 +189,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
           break;
 
         case 0x10: /* SEEK */
-          if(D->Verbose) printf("WD1793: SEEK-TRACK %d (%02Xh)\n",D->R[3],V);
           /* Reset any executing command */
           D->RDLength=D->WRLength=0;
           D->Track[D->Drive]=D->R[3];
@@ -171,11 +205,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
         case 0x50: /* STEP-IN-AND-UPDATE */
         case 0x60: /* STEP-OUT */
         case 0x70: /* STEP-OUT-AND-UPDATE */
-          if(D->Verbose) printf("WD1793: STEP%s%s (%02Xh)\n",
-            V&0x40? (V&0x20? "-OUT":"-IN"):"",
-            V&0x10? "-AND-UPDATE":"",
-            V
-          );
           /* Either store or fetch step direction */
           if(V&0x40) D->LastS=V&0x20; else V=(V&~0x20)|D->LastS;
           /* Step the head, update track register if requested */
@@ -193,7 +222,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
 
         case 0x80:
         case 0x90: /* READ-SECTORS */
-          if(D->Verbose) printf("WD1793: READ-SECTOR%s %c:%d:%d:%d (%02Xh)\n",V&0x10? "S":"",D->Drive+'A',D->Side,D->R[1],D->R[2],V);
           /* Seek to the requested sector */
           D->Ptr=SeekFDI(
             D->Disk[D->Drive],D->Side,D->Track[D->Drive],
@@ -202,7 +230,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
           /* If seek successful, set up reading operation */
           if(!D->Ptr)
           {
-            if(D->Verbose) printf("WD1793: READ ERROR\n");
             D->R[0]     = (D->R[0]&~F_ERRCODE)|F_NOTFOUND;
             D->IRQ      = WD1793_IRQ;
           }
@@ -218,7 +245,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
 
         case 0xA0:
         case 0xB0: /* WRITE-SECTORS */
-          if(D->Verbose) printf("WD1793: WRITE-SECTOR%s %c:%d:%d:%d (%02Xh)\n",V&0x10? "S":"",'A'+D->Drive,D->Side,D->R[1],D->R[2],V);
           /* Seek to the requested sector */
           D->Ptr=SeekFDI(
             D->Disk[D->Drive],D->Side,D->Track[D->Drive],
@@ -227,7 +253,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
           /* If seek successful, set up writing operation */
           if(!D->Ptr)
           {
-            if(D->Verbose) printf("WD1793: WRITE ERROR\n");
             D->R[0]     = (D->R[0]&~F_ERRCODE)|F_NOTFOUND;
             D->IRQ      = WD1793_IRQ;
           }
@@ -238,11 +263,11 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
             D->R[0]    |= F_BUSY|F_DRQ;
             D->IRQ      = WD1793_DRQ;
             D->Wait     = 255;
+            D->Disk[D->Drive]->Dirty = 1;
           }
           break;
 
         case 0xC0: /* READ-ADDRESS */
-          if(D->Verbose) printf("WD1793: READ-ADDRESS (%02Xh)\n",V);
           /* Read first sector address from the track */
           if(!D->Disk[D->Drive]) D->Ptr=0;
           else
@@ -258,7 +283,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
           /* If address found, initiate data transfer */
           if(!D->Ptr)
           {
-            if(D->Verbose) printf("WD1793: READ-ADDRESS ERROR\n");
             D->R[0]    |= F_NOTFOUND;
             D->IRQ      = WD1793_IRQ;
           }
@@ -273,15 +297,23 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
           break;
 
         case 0xE0: /* READ-TRACK */
-          if(D->Verbose) printf("WD1793: READ-TRACK %d (%02Xh) UNSUPPORTED!\n",D->R[1],V);
           break;
 
-        case 0xF0: /* WRITE-TRACK */
-          if(D->Verbose) printf("WD1793: WRITE-TRACK %d (%02Xh) UNSUPPORTED!\n",D->R[1],V);
+        case 0xF0: /* WRITE-TRACK, i.e., format */
+          // not implementing the full protocol (involves parsing lead-in & lead-out); simply setting track data to 0xe5
+          if(D->Ptr=SeekFDI(D->Disk[D->Drive],0,D->Track[D->Drive],0,D->R[1],1))
+          {
+            memset(D->Ptr, 0xe5, D->Disk[D->Drive]->SecSize * D->Disk[D->Drive]->Sectors);
+            D->Disk[D->Drive]->Dirty = 1;
+          }
+          if(D->Disk[D->Drive]->Sides>1 && (D->Ptr=SeekFDI(D->Disk[D->Drive],1,D->Track[D->Drive],1,D->R[1],1)))
+          {
+            memset(D->Ptr, 0xe5, D->Disk[D->Drive]->SecSize * D->Disk[D->Drive]->Sectors);
+            D->Disk[D->Drive]->Dirty = 1;
+          }
           break;
 
         default: /* UNKNOWN */
-          if(D->Verbose) printf("WD1793: UNSUPPORTED OPERATION %02Xh!\n",V);
           break;
       }
       break;
@@ -293,7 +325,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
 
     case WD1793_SYSTEM:
 // @@@ Too verbose
-//      if(D->Verbose) printf("WD1793: Drive %c, %cD side %d\n",'A'+(V&S_DRIVE),V&S_DENSITY? 'D':'S',V&S_SIDE? 0:1);
       /* Reset controller if S_RESET goes up */
       if((D->R[4]^V)&V&S_RESET) Reset1793(D,D->Disk[0],WD1793_KEEP);
       /* Set disk #, side #, ignore the density (@@@) */
@@ -305,12 +336,11 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
 
     case WD1793_DATA:
       /* When writing data, store value to disk */
-      if(!D->WRLength)
-      { if(D->Verbose) printf("WD1793: EXTRA DATA WRITE (%02Xh)\n",V); }
-      else
+      if(D->WRLength)
       {
         /* Write data */
         *D->Ptr++=V;
+        D->Disk[D->Drive]->Dirty=1;
         /* Decrement length */
         if(--D->WRLength)
         {
@@ -322,7 +352,6 @@ byte Write1793(register WD1793 *D,register byte A,register byte V)
         else
         {
           /* Write completed */
-          if(D->Verbose) printf("WD1793: WRITE COMPLETED\n");
           D->R[0]&= ~(F_DRQ|F_BUSY);
           D->IRQ  = WD1793_IRQ;
         }

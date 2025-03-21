@@ -6,7 +6,7 @@
 /** port interface (PPI) chip from Intel. See I8255.h for   **/
 /** declarations.                                           **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2001-2014                 **/
+/** Copyright (C) Marat Fayzullin 2001-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -17,7 +17,7 @@
 /** Reset the chip. Set all data to 0x00. Set all ports to  **/
 /** "input" mode.                                           **/
 /*************************************************************/
-void Reset8255(register I8255 *D)
+void Reset8255(I8255 *D)
 {
   /* Initialize all registers and ports */
   D->R[0]=D->Rout[0]=D->Rin[0]=0x00;
@@ -30,7 +30,7 @@ void Reset8255(register I8255 *D)
 /** Write value V into i8255 register A. Returns 0 when A   **/
 /** is out of range, 1 otherwise.                           **/
 /*************************************************************/
-byte Write8255(register I8255 *D,register byte A,register byte V)
+uint8_t Write8255(I8255 *D,uint8_t A,uint8_t V)
 {
   switch(A)
   {
@@ -69,7 +69,7 @@ byte Write8255(register I8255 *D,register byte A,register byte V)
 /** Read value from an i8255 register A. Returns 0 when A   **/
 /** is out of range.                                        **/
 /*************************************************************/
-byte Read8255(register I8255 *D,register byte A)
+uint8_t Read8255(I8255 *D,uint8_t A)
 {
   switch(A)
   {

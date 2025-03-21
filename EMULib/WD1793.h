@@ -6,7 +6,7 @@
 /** controller produced by Western Digital. See WD1793.c    **/
 /** for implementation.                                     **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2005-2014                 **/
+/** Copyright (C) Marat Fayzullin 2005-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -74,48 +74,61 @@ extern "C" {
 #define S_SIDE     0x10
 #define S_DENSITY  0x20
 
-#ifndef BYTE_TYPE_DEFINED
-#define BYTE_TYPE_DEFINED
-typedef unsigned char byte;
-#endif
-
+#pragma pack(4)
 typedef struct
 {
-  FDIDisk *Disk[4]; /* Disk images */
+  int  Rsrvd1[4];   /* Reserved, do not touch */
 
-  byte R[5];        /* Registers */
-  byte Drive;       /* Current disk # */
-  byte Side;        /* Current side # */
-  byte Track[4];    /* Current track # */
-  byte LastS;       /* Last STEP direction */
-  byte IRQ;         /* 0x80: IRQ pending, 0x40: DRQ pending */
-  byte Wait;        /* Expiration counter */
+  uint8_t R[5];        /* Registers */
+  uint8_t Drive;       /* Current disk # */
+  uint8_t Side;        /* Current side # */
+  uint8_t Track[4];    /* Current track # */
+  uint8_t LastS;       /* Last STEP direction */
+  uint8_t IRQ;         /* 0x80: IRQ pending, 0x40: DRQ pending */
+  uint8_t Wait;        /* Expiration counter */
+  uint8_t Cmd;         /* Last command */
 
   int  WRLength;    /* Data left to write */
   int  RDLength;    /* Data left to read */
-  byte *Ptr;        /* Pointer to data */
+  int  Rsrvd2;      /* Reserved, do not touch */
 
-  byte Verbose;     /* 1: Print debugging messages */
+  /*--- Save1793() will save state above this line ----*/
+
+  uint8_t *Ptr;        /* Pointer to data */
+  FDIDisk *Disk[NUM_FDI_DRIVES]; /* Disk images */
 } WD1793;
+#pragma pack()
 
 /** Reset1793() **********************************************/
 /** Reset WD1793. When Disks=WD1793_INIT, also initialize   **/
 /** disks. When Disks=WD1793_EJECT, eject inserted disks,   **/
 /** freeing memory.                                         **/
 /*************************************************************/
-void Reset1793(register WD1793 *D,FDIDisk *Disks,register byte Eject);
+void Reset1793(WD1793 *D,FDIDisk *Disks,uint8_t Eject);
 
 /** Read1793() ***********************************************/
 /** Read value from a WD1793 register A. Returns read data  **/
 /** on success or 0xFF on failure (bad register address).   **/
 /*************************************************************/
-byte Read1793(register WD1793 *D,register byte A);
+uint8_t Read1793(WD1793 *D,uint8_t A);
 
 /** Write1793() **********************************************/
 /** Write value V into WD1793 register A. Returns DRQ/IRQ   **/
 /** values.                                                 **/
 /*************************************************************/
-byte Write1793(register WD1793 *D,register byte A,register byte V);
+uint8_t Write1793(WD1793 *D,uint8_t A,uint8_t V);
+
+/** Save1793() ***********************************************/
+/** Save WD1793 state to a given buffer of given maximal    **/
+/** size. Returns number of bytes saved or 0 on failure.    **/
+/*************************************************************/
+unsigned int Save1793(const WD1793 *D,uint8_t *Buf,unsigned int Size);
+
+/** Load1793() ***********************************************/
+/** Load WD1793 state from a given buffer of given maximal  **/
+/** size. Returns number of bytes loaded or 0 on failure.   **/
+/*************************************************************/
+unsigned int Load1793(WD1793 *D,uint8_t *Buf,unsigned int Size);
 
 #ifdef __cplusplus
 }

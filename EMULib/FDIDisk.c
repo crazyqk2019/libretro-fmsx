@@ -6,13 +6,17 @@
 /** disk images in various formats. The internal format is  **/
 /** always .FDI. See FDIDisk.h for declarations.            **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2007-2014                 **/
+/** Copyright (C) Marat Fayzullin 2007-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
+
+#include "libretro.h"
+
 #include "FDIDisk.h"
-#include <stdio.h>
+
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #ifdef _WIN32
@@ -21,6 +25,15 @@
 #include <unistd.h>
 #endif
 #include <ctype.h>
+
+#include <streams/file_stream_transforms.h>
+
+extern retro_log_printf_t log_cb;
+
+#define SRAM_HEADER 0xA5
+extern uint8_t *sram_disk_ptr;
+uint8_t* DiskData=NULL;
+int DiskSize=0;
 
 #define IMAGE_SIZE(Fmt) \
   (Formats[Fmt].Sides*Formats[Fmt].Tracks*    \
@@ -36,18 +49,28 @@
 #define FDI_SECSIZE(S)    (SecSizes[(S)[3]<=4? (S)[3]:4])
 #define FDI_SECTOR(P,T,S) (FDI_TRACK(P,T)+(S)[5]+((int)((S)[6])<<8))
 
+#ifdef _MSC_VER
+#undef unlink
+#define unlink _unlink
+#endif
+
 static const struct { int Sides,Tracks,Sectors,SecSize; } Formats[] =
 {
   { 2,80,16,256 }, /* Dummy format */
   { 2,80,10,512 }, /* FMT_IMG can be 256 */
   { 2,80,10,512 }, /* FMT_MGT can be 256 */
-  { 2,80,16,256 }, /* FMT_TRD */
-  { 2,80,10,512 }, /* FMT_FDI */
-  { 2,80,16,256 }, /* FMT_SCL */
-  { 2,80,16,256 }, /* FMT_HOBETA */
-  { 2,80,9,512 },  /* FMT_DSK */
-  { 2,80,9,512 },  /* FMT_CPCDSK */
-  { 1,40,16,256 }  /* FMT_SF7000 */
+  { 2,80,16,256 }, /* FMT_TRD    - ZX Spectrum TRDOS disk */
+  { 2,80,10,512 }, /* FMT_FDI    - Generic FDI image */
+  { 2,80,16,256 }, /* FMT_SCL    - ZX Spectrum TRDOS disk */
+  { 2,80,16,256 }, /* FMT_HOBETA - ZX Spectrum HoBeta disk */
+  { 2,80,9,512 },  /* FMT_MSXDSK - MSX disk */
+  { 2,80,9,512 },  /* FMT_CPCDSK - CPC disk */
+  { 1,40,16,256 }, /* FMT_SF7000 - Sega SF-7000 disk */
+  { 2,80,10,512 }, /* FMT_SAMDSK - Sam Coupe disk */
+  { 1,40,8,512 },  /* FMT_ADMDSK - Coleco Adam disk */
+  { 1,32,16,512 }, /* FMT_DDP    - Coleco Adam tape */
+  { 2,80,10,512 }, /* FMT_SAD    - Sam Coupe disk */
+  { 2,80,9,512 }   /* FMT_DSK    - Assuming 720kB MSX format */
 };
 
 static const int SecSizes[] =
@@ -56,7 +79,7 @@ static const int SecSizes[] =
 static const char FDIDiskLabel[] =
 "Disk image created by EMULib (C)Marat Fayzullin";
 
-static const byte TRDDiskInfo[] =
+static const uint8_t TRDDiskInfo[] =
 {
   0x01,0x16,0x00,0xF0,0x09,0x10,0x00,0x00,
   0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,
@@ -82,6 +105,7 @@ void InitFDI(FDIDisk *D)
   D->Tracks   = 0;
   D->Sectors  = 0;
   D->SecSize  = 0;
+  D->Dirty    = 0;
 }
 
 /** EjectFDI() ***********************************************/
@@ -98,9 +122,9 @@ void EjectFDI(FDIDisk *D)
 /** dimensions. Returns disk data pointer on success, 0 on  **/
 /** failure.                                                **/
 /*************************************************************/
-byte *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize)
+uint8_t *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize)
 {
-  byte *P,*DDir;
+  uint8_t *P,*DDir;
   int I,J,K,L,N;
 
   /* Find sector size code */
@@ -110,7 +134,7 @@ byte *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize)
   /* Allocate memory */
   K = Sides*Tracks*Sectors*SecSize+sizeof(FDIDiskLabel);
   I = Sides*Tracks*(Sectors+1)*7+14;
-  if(!(P=(byte *)malloc(I+K))) return(0);
+  if(!(P=(uint8_t *)malloc(I+K))) return(0);
   memset(P,0x00,I+K);
 
   /* Eject previous disk image */
@@ -186,10 +210,10 @@ byte *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize)
 /*************************************************************/
 int LoadFDI(FDIDisk *D,const char *FileName,int Format)
 {
-  byte Buf[256],*P,*DDir;
+  uint8_t Buf[256],*P,*DDir;
   const char *T;
-  int J,I,K,L,N;
-  FILE *F;
+  int J,I,K,L,N,Size;
+  RFILE *F;
 
   /* If just ejecting a disk, drop out */
   if(!FileName) { EjectFDI(D);return(0); }
@@ -209,38 +233,51 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
            : !stricmpn(T,".TRD",4)? FMT_TRD
            : !stricmpn(T,".SCL",4)? FMT_SCL
            : !stricmpn(T,".DSK",4)? FMT_DSK
+           : !stricmpn(T,".DDP",4)? FMT_DDP
+           : !stricmpn(T,".SAD",4)? FMT_SAD
            : !stricmpn(T,".$",2)?   FMT_HOBETA
            : 0;
 
-    /* Try loading by extension */
-    if(Format&&(J=LoadFDI(D,FileName,Format))) return(J);
+    /* Try loading by extension, ignore generic raw images for now */
+    if(Format&&(Format!=FMT_DSK)&&(Format!=FMT_MGT)&&(J=LoadFDI(D,FileName,Format)))
+      return(J);
 
-    /* Attention: FMT_DSK and FMT_CPCDSK share the same .DSK extension */
-    if((Format!=FMT_CPCDSK)&&LoadFDI(D,FileName,FMT_CPCDSK)) return(FMT_CPCDSK);
+    /* Try loading by magic number... */
 
-    /* Try loading by magic number */
-    if((Format!=FMT_FDI)&&LoadFDI(D,FileName,FMT_FDI)) return(FMT_FDI);
-    if((Format!=FMT_SCL)&&LoadFDI(D,FileName,FMT_SCL)) return(FMT_SCL);
-    if((Format!=FMT_DSK)&&LoadFDI(D,FileName,FMT_DSK)) return(FMT_DSK);
+    /* Starts with "FDI" */
+    if(LoadFDI(D,FileName,FMT_FDI)) return(FMT_FDI);
 
-    /* Everything failed */
-    return(0);
+    /* Starts with "SINCLAIR" */
+    if(LoadFDI(D,FileName,FMT_SCL)) return(FMT_SCL);
+
+    /* Starts with "Aley's disk backup" */
+    if(LoadFDI(D,FileName,FMT_SAD)) return(FMT_SAD);
+
+    /* Starts with "MV - CPC" or "EXTENDED CPC DSK File" */
+    if(LoadFDI(D,FileName,FMT_CPCDSK)) return(FMT_CPCDSK);
+
+    /* Starts with 0xE9 or 0xEB, with some other constraints */
+    if(LoadFDI(D,FileName,FMT_MSXDSK)) return(FMT_MSXDSK);
+
+    /* Try loading as a generic raw disk image */
+    return(LoadFDI(D,FileName,FMT_DSK));
   }
 
   /* Open file and find its size */
-  if(!(F=fopen(FileName,"rb"))) return(0);
-  if(fseek(F,0,SEEK_END)<0) { fclose(F);return(0); }
-  if((J=ftell(F))<=0)       { fclose(F);return(0); }
-  rewind(F);
+  if(!(F=rfopen(FileName,"rb"))) return(0);
+  if(rfseek(F,0,SEEK_END)<0) { rfclose(F);return(0); }
+  if((J=rftell(F))<=0)       { rfclose(F);return(0); }
+  filestream_rewind(F);
+  Size=J;
 
   switch(Format)
   {
     case FMT_FDI: /* If .FDI format... */
       /* Allocate memory and read file */
-      if(!(P=(byte *)malloc(J))) { fclose(F);return(0); }
-      if(fread(P,1,J,F)!=J)      { free(P);fclose(F);return(0); }
+      if(!(P=(uint8_t *)malloc(J))) { rfclose(F);return(0); }
+      if(rfread(P,1,J,F)!=J)      { free(P);rfclose(F);return(0); }
       /* Verify .FDI format tag */
-      if(memcmp(P,"FDI",3))      { free(P);fclose(F);return(0); }
+      if(memcmp(P,"FDI",3))      { free(P);rfclose(F);return(0); }
       /* Eject current disk image */
       EjectFDI(D);
       /* Read disk dimensions */
@@ -266,13 +303,53 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
       if(J) D->Sectors=D->SecSize=0;
       break;
 
-    case FMT_DSK: /* If .DSK format... */
+    case FMT_DSK: /* If generic raw disk image... */
+    case FMT_MGT: /* ZX Spectrum .MGT is similar to .DSK */
+      /* Try a few standard geometries first */
+      I = J==IMAGE_SIZE(FMT_MSXDSK)? FMT_MSXDSK /* 737280 bytes */
+        : J==IMAGE_SIZE(FMT_ADMDSK)? FMT_ADMDSK /* 163840 bytes */
+        : J==IMAGE_SIZE(FMT_SAMDSK)? FMT_SAMDSK /* 819200 bytes */
+        : J==IMAGE_SIZE(FMT_TRD)?    FMT_TRD    /* 655360 bytes */
+        : J==IMAGE_SIZE(FMT_DDP)?    FMT_DDP    /* 262144 bytes */
+        : J==IMAGE_SIZE(FMT_SF7000)? FMT_SF7000 /* 163840 bytes (!) */
+        : J==IMAGE_SIZE(FMT_MGT)?    FMT_MGT    /* 819200 bytes (!) */
+        : 0;
+      /* If a standard geometry found... */
+      if(I)
+      {
+        /* Create a new disk image */
+        P = FormatFDI(D,Format=I);
+        if(!P) { rfclose(F);return(0); }
+        /* Read disk image file (ignore short reads!) */
+        rfread(P,1,IMAGE_SIZE(I),F);
+        /* Done */
+        P = D->Data;
+        break;
+      }
+      /* Try finding matching geometry */
+      for(K=1,P=0;!P&&(K<=2);K<<=1)
+        for(I=40;!P&&(I<=80);I<<=1)
+          for(N=8;!P&&(N<=16);++N)
+            for(L=256;!P&&(L<=512);L<<=1)
+              if(J==K*I*N*L)
+              {
+                /* Create a new disk image */
+                P = NewFDI(D,K,I,N,L);
+                if(!P) { rfclose(F);return(0); }
+                /* Read disk image file (ignore short reads!) */
+                rfread(P,1,J,F);
+                /* Done */
+                P = D->Data;
+              }
+      break;
+
+    case FMT_MSXDSK: /* If MSX .DSK format... */
       /* Read header */
-      if(fread(Buf,1,32,F)!=32) { fclose(F);return(0); }
+      if(rfread(Buf,1,32,F)!=32) { rfclose(F);return(0); }
       /* Check magic number */
-      if((Buf[0]!=0xE9)&&(Buf[0]!=0xEB)) { fclose(F);return(0); }
+      if((Buf[0]!=0xE9)&&(Buf[0]!=0xEB)) { rfclose(F);return(0); }
       /* Check media descriptor */
-      if(Buf[21]<0xF8) { fclose(F);return(0); }
+      if(Buf[21]<0xF8) { rfclose(F);return(0); }
       /* Compute disk geometry */
       K = Buf[26]+((int)Buf[27]<<8);       /* Heads   */
       N = Buf[24]+((int)Buf[25]<<8);       /* Sectors */
@@ -283,23 +360,23 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
       K = I&&N&&L? J/I/N/L:0;
       /* Create a new disk image */
       P = NewFDI(D,K,I,N,L);
-      if(!P) { fclose(F);return(0); }
+      if(!P) { rfclose(F);return(0); }
       /* Make sure we do not read too much data */
       I = K*I*N*L;
       J = J>I? I:J;
       /* Read disk image file (ignore short reads!) */
-      rewind(F);
-      fread(P,1,J,F);
+      filestream_rewind(F);
+      rfread(P,1,J,F);
       /* Done */
       P = D->Data;
       break;
 
     case FMT_CPCDSK: /* If Amstrad CPC .DSK format... */
       /* Read header (first track is next) */
-      if(fread(Buf,1,256,F)!=256) { fclose(F);return(0); }
+      if(rfread(Buf,1,256,F)!=256) { rfclose(F);return(0); }
       /* Check magic string */
       if(memcmp(Buf,"MV - CPC",8)&&memcmp(Buf,"EXTENDED CPC DSK File",21))
-      { fclose(F);return(0); }
+      { rfclose(F);return(0); }
       /* Compute disk geometry */
       I = Buf[48];                   /* Tracks  */
       K = Buf[49];                   /* Heads   */
@@ -311,11 +388,13 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
           if(L<((int)Buf[J+52]<<8)) L=(int)Buf[J+52]<<8;
       /* Maximal sector size */  
       L = (L-0x100+N-1)/N;
+      /* Round up to the next power of two */
+      for(J=1;J<L;J<<=1);
+      L = J;
       /* Check geometry */
-//printf("Tracks=%d, Heads=%d, Sectors=%d, SectorSize=%d\n",I,K,N,L);
-      if(!K||!N||!L||!I) { fclose(F);return(0); }
+      if(!K||!N||!L||!I) { rfclose(F);return(0); }
       /* Create a new disk image */
-      if(!NewFDI(D,K,I,N,L)) { fclose(F);return(0); }
+      if(!NewFDI(D,K,I,N,L)) { rfclose(F);return(0); }
       /* Sectors-per-track and bytes-per-sector may vary */
       D->Sectors = 0;
       D->SecSize = 0;
@@ -323,12 +402,12 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
       DDir = FDI_DIR(D->Data);
       P    = FDI_DATA(D->Data);
       /* Skip to the first track info block */
-      fseek(F,0x100,SEEK_SET);
+      rfseek(F,0x100,SEEK_SET);
       /* Read tracks */
       for(I*=K;I;--I)
       {
         /* Read track header */
-        if(fread(Buf,1,0x18,F)!=0x18) break;
+        if(rfread(Buf,1,0x18,F)!=0x18) break;
         /* Check magic string */
         if(memcmp(Buf,"Track-Info\r\n",12)) break;
         /* Compute track geometry */
@@ -344,62 +423,62 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
         DDir[5] = 0;
         DDir[6] = N;
         /* Read sector headers */
-        for(DDir+=7,J=N,K=0;J&&(fread(Buf,8,1,F)==8);DDir+=7,--J,K+=SecSizes[L])
+        for(DDir+=7,J=N,K=0;J&&(rfread(Buf,8,1,F)==8);DDir+=7,--J,K+=SecSizes[L])
         {
           /* Create .FDI sector entry */
           DDir[0] = Buf[0];
           DDir[1] = Buf[1];
           DDir[2] = Buf[2];
           DDir[3] = Buf[3];
-          DDir[4] = (1<<L)|(~Buf[4]&0x80);
+//          DDir[4] = (1<<L)|(~Buf[4]&0x80);
+          DDir[4] = (1<<L)|((Buf[5]&0x40)<<1);
           DDir[5] = K&0xFF;
           DDir[6] = K>>8;
         }
         /* Seek to the track data */
-        if(fseek(F,0x100-0x18-8*N,SEEK_CUR)<0) break;
+        if(rfseek(F,0x100-0x18-8*N,SEEK_CUR)<0) break;
         /* Read track data */
-        if(fread(P,1,K,F)!=K) break; else P+=K;
+        if(rfread(P,1,K,F)!=K) break; else P+=K;
       }
       /* Done */
       P = D->Data;
       break;
 
-    case FMT_TRD:    /* If .TRD format... */
-    case FMT_MGT:    /* If .MGT format... */
-    case FMT_SF7000: /* If .SF format...  */
+    case FMT_SAD: /* If Sam Coupe .SAD format... */
+      /* Read header */
+      if(rfread(Buf,1,22,F)!=22) { rfclose(F);return(0); }
+      /* Check magic string */
+      if(memcmp(Buf,"Aley's disk backup",18)) { rfclose(F);return(0); }
+      /* Compute disk geometry */
+      K = Buf[18];     /* Heads       */
+      I = Buf[19];     /* Tracks      */
+      N = Buf[20];     /* Sectors     */
+      L = Buf[21]*64;  /* Sector size */
+      /* Check geometry */
+      if(!K||!N||!L||!I) { rfclose(F);return(0); }
       /* Create a new disk image */
-      P = NewFDI(
-            D,
-            Formats[Format].Sides,
-            Formats[Format].Tracks,
-            Formats[Format].Sectors,
-            Formats[Format].SecSize
-          );
-      if(!P) { fclose(F);return(0); }
+      P = NewFDI(D,K,I,N,L);
+      if(!P) { rfclose(F);return(0); }
       /* Make sure we do not read too much data */
-      J = J>IMAGE_SIZE(Format)? IMAGE_SIZE(Format):J;
+      I = K*I*N*L;
+      J = J-22;
+      J = J>I? I:J;
       /* Read disk image file (ignore short reads!) */
-      fread(P,1,J,F);
+      rfread(P,1,J,F);
       /* Done */
       P = D->Data;
       break;
 
     case FMT_IMG: /* If .IMG format... */
       /* Create a new disk image */
-      P = NewFDI(
-            D,
-            Formats[Format].Sides,
-            Formats[Format].Tracks,
-            Formats[Format].Sectors,
-            Formats[Format].SecSize
-          );
-      if(!P) { fclose(F);return(0); }
+      P = FormatFDI(D,Format);
+      if(!P) { rfclose(F);return(0); }
       /* Read disk image file track-by-track */
       K = Formats[Format].Tracks;
       L = Formats[Format].Sectors*Formats[Format].SecSize;
       I = Formats[Format].Tracks*Formats[Format].Sides;
       for(J=0;J<I;++J)
-        if(fread(P+L*2*(J%K)+(J>=K? L:0),1,L,F)!=L) break;
+        if(rfread(P+L*2*(J%K)+(J>=K? L:0),1,L,F)!=L) break;
       /* Done */
       P = D->Data;
       break;
@@ -407,25 +486,19 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
     case FMT_SCL: /* If .SCL format... */
       /* @@@ NEED TO CHECK CHECKSUM AT THE END */
       /* Read header */
-      if(fread(Buf,1,9,F)!=9) { fclose(F);return(0); }
+      if(rfread(Buf,1,9,F)!=9) { rfclose(F);return(0); }
       /* Verify .SCL format tag and the number of files */
-      if(memcmp(Buf,"SINCLAIR",8)||(Buf[8]>128)) { fclose(F);return(0); }
+      if(memcmp(Buf,"SINCLAIR",8)||(Buf[8]>128)) { rfclose(F);return(0); }
       /* Create a new disk image */
-      P = NewFDI(
-            D,
-            Formats[Format].Sides,
-            Formats[Format].Tracks,
-            Formats[Format].Sectors,
-            Formats[Format].SecSize
-          );
-      if(!P) { fclose(F);return(0); }
+      P = FormatFDI(D,Format);
+      if(!P) { rfclose(F);return(0); }
       /* Compute the number of free sectors */
       I = D->Sides*D->Tracks*D->Sectors;
       /* Build directory, until we run out of disk space */
       for(J=0,K=D->Sectors,DDir=P;(J<Buf[8])&&(K<I);++J)
       {
         /* Read .SCL directory entry */
-        if(fread(DDir,1,14,F)!=14) break;
+        if(rfread(DDir,1,14,F)!=14) break;
         /* Compute sector and track */
         DDir[14] = K%D->Sectors;
         DDir[15] = K/D->Sectors;
@@ -434,7 +507,7 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
         DDir    += 16;
       }
       /* Skip over remaining directory entries */
-      if(J<Buf[8]) fseek(F,(Buf[8]-J)*14,SEEK_CUR);
+      if(J<Buf[8]) rfseek(F,(Buf[8]-J)*14,SEEK_CUR);
       /* Build disk information */
       memset(P+J*16,0,D->Sectors*D->SecSize-J*16);
       memcpy(P+0x08E2,TRDDiskInfo,sizeof(TRDDiskInfo));
@@ -452,7 +525,7 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
         I = (DDir[15]*D->Sectors+DDir[14])*D->SecSize;
         N = DDir[13]*D->SecSize;
         /* Read .SCL data (ignore short reads!) */
-        fread(P+I,1,N,F);
+        rfread(P+I,1,N,F);
       }
       /* Done */
       P = D->Data;
@@ -460,23 +533,17 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
 
     case FMT_HOBETA: /* If .$* format... */
       /* Create a new disk image */
-      P = NewFDI(
-            D,
-            Formats[Format].Sides,
-            Formats[Format].Tracks,
-            Formats[Format].Sectors,
-            Formats[Format].SecSize
-          );
-      if(!P) { fclose(F);return(0); }
+      P = FormatFDI(D,Format);
+      if(!P) { rfclose(F);return(0); }
       /* Read header */
-      if(fread(P,1,17,F)!=17) { fclose(F);return(0); }
+      if(rfread(P,1,17,F)!=17) { rfclose(F);return(0); }
       /* Determine data offset and size */
       I = D->Sectors*D->SecSize;
       N = P[13]+((int)P[14]<<8);
       /* Build disk information */
       memset(P+16,0,I-16);
       memcpy(P+0x08E2,TRDDiskInfo,sizeof(TRDDiskInfo));
-      strncpy(P+0x08F5,"SPECCY",8);
+      strncpy((char*)P+0x08F5,"SPECCY",8);
       K        = D->Sectors+N;
       J        = D->Sectors*D->Tracks*D->Sides-K;
       P[0x8E1] = K%D->Sectors;  /* First free sector */
@@ -487,7 +554,7 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
       P[0x8E6] = J>>8;
       N        = N*D->SecSize;  /* N is now in bytes */
       /* Read data (ignore short reads!) */
-      fread(P+I,1,N,F);
+      rfread(P+I,1,N,F);
       /* Compute and check checksum */
       for(L=I=0;I<15;++I) L+=P[I];
       L = ((L*257+105)&0xFFFF)-P[15]-((int)P[16]<<8);
@@ -501,98 +568,275 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format)
       P = D->Data;
       break;
 
+    case FMT_SF7000: /* If SF-7000 .SF format...  */
+    case FMT_SAMDSK: /* If Sam Coupe .DSK format... */
+    case FMT_ADMDSK: /* If Coleco Adam .DSK format... */
+    case FMT_DDP:    /* If Coleco Adam .DDP format... */
+    case FMT_TRD:    /* If ZX Spectrum .TRD format... */
+      /* Must have exact size, unless it is a .TRD */
+      if((Format!=FMT_TRD) && (J!=IMAGE_SIZE(Format))) { rfclose(F);return(0); }
+      /* Create a new disk image */
+      P = FormatFDI(D,Format);
+      if(!P) { rfclose(F);return(0); }
+      /* Read disk image file (ignore short reads!) */
+      rfread(P,1,IMAGE_SIZE(Format),F);
+      /* Done */
+      P = D->Data;
+      break;
+
     default:
       /* Format not recognized */
       return(0);
   }
 
-  if(D->Verbose)
-    printf(
-      "LoadFDI(): Loaded '%s', %d sides x %d tracks x %d sectors x %d bytes\n",
-      FileName,D->Sides,D->Tracks,D->Sectors,D->SecSize
-    );
+  /* expose data ptr to enable libretro SRAM patching */
+  DiskData=FDI_DATA(P);
+  DiskSize=Size;
 
   /* Done */
-  fclose(F);
+  rfclose(F);
   D->Data   = P;
   D->Format = Format;
   return(Format);
 }
 
+/** SaveDSKData() ********************************************/
+/** Save uniform disk data, truncating or adding zeros as   **/
+/** needed. Returns FDI_SAVE_OK on success, FDI_SAVE_PADDED **/
+/** if any sectors were padded, FDI_SAVE_TRUNCATED if any   **/
+/** sectors were truncated, FDI_SAVE_FAILED if failed.      **/
+/*************************************************************/
+static int SaveDSKData(FDIDisk *D,RFILE *F,int Sides,int Tracks,int Sectors,int SecSize)
+{
+  int J,I,K,Result;
+
+  Result = FDI_SAVE_OK;
+
+  /* Scan through all tracks, sides, sectors */
+  for(J=0;J<Tracks;++J)
+    for(I=0;I<Sides;++I)
+      for(K=0;K<Sectors;++K)
+      {
+        /* Seek to sector and determine actual sector size */
+        uint8_t *P = SeekFDI(D,I,J,I,J,K+1);
+        int   L = D->SecSize<SecSize? D->SecSize:SecSize;
+        /* Write sector */
+        if(!P||!L||(rfwrite(P,1,L,F)!=L)) return(FDI_SAVE_FAILED);
+        /* Pad sector to SecSize, if needed */
+        if((SecSize>L)&&rfseek(F,SecSize-L,SEEK_CUR)) return(FDI_SAVE_FAILED);
+        /* Update result */
+        L = SecSize>L? FDI_SAVE_PADDED:SecSize<L? FDI_SAVE_TRUNCATED:FDI_SAVE_OK;
+        if(L<Result) Result=L;
+      }
+
+  /* Done */
+  return(Result);
+}
+
+static int SaveDSKDataToMemory(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize)
+{
+  int J,I,K,Result = FDI_SAVE_OK;
+  int Off,Size = Sides*Tracks*Sectors*SecSize;
+
+  memset(sram_disk_ptr, 0, Size);
+
+  /* Scan through all tracks, sides, sectors */
+  for(J=0;J<Tracks;++J)
+    for(I=0;I<Sides;++I)
+      for(K=0;K<Sectors;++K)
+      {
+        /* Seek to sector and determine actual sector size */
+        uint8_t *P = SeekFDI(D,I,J,I,J,K+1);
+        int   L = D->SecSize<SecSize? D->SecSize:SecSize;
+        /* Write sector to memory */
+        if(!P||!L)           { return(FDI_SAVE_FAILED); }
+        Off = P-FDI_DATA(D->Data);
+        memcpy(&sram_disk_ptr[Off],P,L);
+        /* Update result */
+        L = SecSize>L? FDI_SAVE_PADDED:SecSize<L? FDI_SAVE_TRUNCATED:FDI_SAVE_OK;
+        if(L<Result) Result=L;
+      }
+
+  sram_disk_ptr[-1] = SRAM_HEADER;
+
+  /* Done */
+  return(Result);
+}
+
+/** SaveIMGData() ********************************************/
+/** Save uniform disk data, truncating or adding zeros as   **/
+/** needed. Returns FDI_SAVE_OK on success, FDI_SAVE_PADDED **/
+/** if any sectors were padded, FDI_SAVE_TRUNCATED if any   **/
+/** sectors were truncated, FDI_SAVE_FAILED if failed.      **/
+/*************************************************************/
+static int SaveIMGData(FDIDisk *D,RFILE *F,int Sides,int Tracks,int Sectors,int SecSize)
+{
+  int J,I,K,Result;
+
+  Result = FDI_SAVE_OK;
+
+  /* Scan through all sides, tracks, sectors */
+  for(I=0;I<Sides;++I)
+    for(J=0;J<Tracks;++J)
+      for(K=0;K<Sectors;++K)
+      {
+        /* Seek to sector and determine actual sector size */
+        uint8_t *P = SeekFDI(D,I,J,I,J,K+1);
+        int   L = D->SecSize<SecSize? D->SecSize:SecSize;
+        /* Write sector */
+        if(!P||!L||(rfwrite(P,1,L,F)!=L)) return(FDI_SAVE_FAILED);
+        /* Pad sector to SecSize, if needed */
+        if((SecSize>L)&&rfseek(F,SecSize-L,SEEK_CUR)) return(FDI_SAVE_FAILED);
+        /* Update result */
+        L = SecSize>L? FDI_SAVE_PADDED:SecSize<L? FDI_SAVE_TRUNCATED:FDI_SAVE_OK;
+        if(L<Result) Result=L;
+      }
+
+  /* Done */
+  return(Result);
+}
+
 /** SaveFDI() ************************************************/
 /** Save a disk image to a given file, in a given format    **/
 /** (see FMT_* #defines). Use the original format when      **/
-/** when Format=FMT_AUTO. Returns format ID on success or   **/
-/** 0 on failure.                                           **/
+/** when Format=FMT_AUTO. Returns FDI_SAVE_OK on success,   **/
+/** FDI_SAVE_PADDED if any sectors were padded,             **/
+/** FDI_SAVE_TRUNCATED if any sectors were truncated,       **/
+/** FDI_SAVE_FAILED (0) if failed.                          **/
 /*************************************************************/
 int SaveFDI(FDIDisk *D,const char *FileName,int Format)
 {
-  byte S[32];
-  int I,J,K,C,L;
-  FILE *F;
-  byte *P,*T;
+  uint8_t S[256];
+  int I,J,K,C,L,Result;
+  RFILE *F=NULL;
+  uint8_t *P,*T;
+
+  if (!FileName) return(0);
 
   /* Must have a disk to save */
   if(!D->Data) return(0);
+
   /* Use original format if requested */
   if(!Format) Format=D->Format;
+
   /* Open file for writing */
-  if(!(F=fopen(FileName,"wb"))) return(0);
+  if(Format!=FMT_MEMORY && !(F=rfopen(FileName,"wb"))) return(0);
+
+  /* Assume success */
+  Result = FDI_SAVE_OK;
 
   /* Depending on the format... */
   switch(Format)
   {
     case FMT_FDI:
-      if(fwrite(D->Data,1,D->DataSize,F)!=D->DataSize)
-      { fclose(F);unlink(FileName);return(0); }
+      /* This is the native format in which data is stored in memory */
+      if(rfwrite(D->Data,1,D->DataSize,F)!=D->DataSize)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       break;
 
     case FMT_IMG:
       /* Check the number of tracks and sides */
       if((FDI_TRACKS(D->Data)!=Formats[Format].Tracks)||(FDI_SIDES(D->Data)!=Formats[Format].Sides))
-      { fclose(F);unlink(FileName);return(0); }
-      /* Scan through all sides,tracks,sectors */
-      L=Formats[Format].SecSize;
-      for(I=0;I<Formats[Format].Sides;++I)
-        for(J=0;J<Formats[Format].Tracks;++J)
-          for(K=0;K<Formats[Format].Sectors;++K)
-          {
-            P = SeekFDI(D,I,J,I,J,K+1);
-            C = D->SecSize<L? D->SecSize:L;
-            if(!P||(fwrite(P,1,C,F)!=C)) break;
-          }
-      /* If failed to write all sectors, clean up */
-      if(I<Formats[Format].Sides) { fclose(F);unlink(FileName);return(0); }
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
+      /* Write out the data, in sides/tracks/sectors order */
+      Result = SaveIMGData(D,F,Formats[Format].Sides,Formats[Format].Tracks,Formats[Format].Sectors,Formats[Format].SecSize);
+      if(!Result)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       break;
 
-    case FMT_TRD:
-    case FMT_MGT:
     case FMT_SF7000:
+    case FMT_SAMDSK:
+    case FMT_ADMDSK:
+    case FMT_DDP:
+    case FMT_TRD:
       /* Check the number of tracks and sides */
       if((FDI_TRACKS(D->Data)!=Formats[Format].Tracks)||(FDI_SIDES(D->Data)!=Formats[Format].Sides))
-      { fclose(F);unlink(FileName);return(0); }
-    case FMT_DSK:
-      /* Scan through all tracks */
-      J = FDI_SIDES(D->Data)*FDI_TRACKS(D->Data);
-      for(P=FDI_DIR(D->Data);J;--J,P=T)
       {
-        /* Compute total track length for this format */
-        L = Formats[Format].Sectors*Formats[Format].SecSize;
-        /* For every sector on a track, if track length remains... */
-        for(I=FDI_SECTORS(P),T=P+7;I;--I,T+=7)
-          if(L)
-          {
-            /* Write out a sector */
-            K = FDI_SECSIZE(T);
-            K = K>L? L:K;
-            L-= K;
-            if(fwrite(FDI_SECTOR(D->Data,P,T),1,K,F)!=K)
-            { fclose(F);unlink(FileName);return(0); }
-          }
-        /* Fill remaining track length with zeros */
-        if(L>0) fseek(F,L,SEEK_CUR);
+         rfclose(F);
+         unlink(FileName);
+         return(0);
       }
-      /* Done */
+      /* Write out the data, in tracks/sides/sectors order */
+      Result = SaveDSKData(D,F,Formats[Format].Sides,Formats[Format].Tracks,Formats[Format].Sectors,Formats[Format].SecSize);
+      if(!Result)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
+      break;
+
+    case FMT_MSXDSK:
+    case FMT_DSK:
+    case FMT_MGT:
+      /* Must have uniform tracks */
+      if(!D->Sectors || !D->SecSize)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
+      /* Write out the data, in tracks/sides/sectors order */
+      Result = SaveDSKData(D,F,FDI_SIDES(D->Data),FDI_TRACKS(D->Data),D->Sectors,D->SecSize);
+      if(!Result)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
+      break;
+
+    case FMT_MEMORY:
+      /* Must have uniform tracks */
+      if(!D->Sectors || !D->SecSize)
+         return(0);
+      Result = SaveDSKDataToMemory(D,FDI_SIDES(D->Data),FDI_TRACKS(D->Data),D->Sectors,D->SecSize);
+      if(!Result)
+         return(0);
+      break;
+
+    case FMT_SAD:
+      /* Must have uniform tracks with "even" sector size */
+      if(!D->Sectors || !D->SecSize || (D->SecSize&0x3F))
+            {
+               rfclose(F);
+               unlink(FileName);
+               return(0);
+            }
+      /* Fill header */
+      memset(S,0,sizeof(S));
+      strcpy((char *)S,"Aley's disk backup");
+      S[18] = FDI_SIDES(D->Data);
+      S[19] = FDI_TRACKS(D->Data);
+      S[20] = D->Sectors;
+      S[21] = D->SecSize>>6;
+      /* Write header */
+      if(rfwrite(S,1,22,F)!=22)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
+      /* Write out the data, in tracks/sides/sectors order */
+      Result = SaveDSKData(D,F,S[18],S[19],S[20],S[21]*64);
+      if(!Result)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       break;
 
     case FMT_SCL:
@@ -604,16 +848,31 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format)
        ||(D->Sectors!=Formats[Format].Sectors)
        ||(D->SecSize!=Formats[Format].SecSize)
        ||(T[0x8E3]!=0x16)
-      ) { fclose(F);unlink(FileName);return(0); }
+      )
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Write header */
       strcpy((char *)S,"SINCLAIR");
       S[8]=T[0x8E4];
-      if(fwrite(S,1,9,F)!=9) { fclose(F);unlink(FileName);return(0); }
+      if(rfwrite(S,1,9,F)!=9)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       for(C=I=0;I<9;++I) C+=S[I];
       /* Write directory entries */
       for(J=0,P=T;J<T[0x8E4];++J,P+=16)
       {
-        if(fwrite(P,1,14,F)!=14) { fclose(F);unlink(FileName);return(0); }
+        if(rfwrite(P,1,14,F)!=14)
+        {
+           rfclose(F);
+           unlink(FileName);
+           return(0);
+        }
         for(I=0;I<14;++I) C+=P[I];
       }
       /* Write files */
@@ -623,8 +882,12 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format)
         K = (P[15]*D->Sectors+P[14])*D->SecSize;
         I = P[13]*D->SecSize;
         /* Write data */
-        if(fwrite(T+K,1,I,F)!=I)
-        { fclose(F);unlink(FileName);return(0); }
+        if(rfwrite(T+K,1,I,F)!=I)
+        {
+           rfclose(F);
+           unlink(FileName);
+           return(0);
+        }
         /* Compute checksum */
         for(L=K,I+=K;L<I;++L) C+=T[L];
       }
@@ -633,7 +896,12 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format)
       S[1] = (C>>8)&0xFF;
       S[2] = (C>>16)&0xFF;
       S[3] = (C>>24)&0xFF;
-      if(fwrite(S,1,4,F)!=4) { fclose(F);unlink(FileName);return(0); }
+      if(rfwrite(S,1,4,F)!=4)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Done */
       break;
 
@@ -646,11 +914,21 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format)
        ||(D->Sectors!=Formats[Format].Sectors)
        ||(D->SecSize!=Formats[Format].SecSize)
        ||(T[0x8E3]!=0x16)
-      ) { fclose(F);unlink(FileName);return(0); }
+      )
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Look for the first file */
       for(J=0,P=T;(J<T[0x8E4])&&!P[0];++J,P+=16);
       /* If not found, drop out */
-      if(J>=T[0x8E4]) { fclose(F);unlink(FileName);return(0); }      
+      if(J>=T[0x8E4])
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Copy header */
       memcpy(S,P,14);
       /* Get single file address and size */
@@ -663,35 +941,50 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format)
       S[15] = C&0xFF;
       S[16] = (C>>8)&0xFF;
       /* Write header */
-      if(fwrite(S,1,17,F)!=17) { fclose(F);unlink(FileName);return(0); }
+      if(rfwrite(S,1,17,F)!=17)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Write file data */
-      if(fwrite(P,1,I,F)!=I) { fclose(F);unlink(FileName);return(0); }
+      if(rfwrite(P,1,I,F)!=I)
+      {
+         rfclose(F);
+         unlink(FileName);
+         return(0);
+      }
       /* Done */
       break;
 
     default:
       /* Can't save this format for now */
-      fclose(F);
+      rfclose(F);
       unlink(FileName);
       return(0);
   }
 
   /* Done */
-  fclose(F);
-  return(Format);
+  D->Dirty=0;
+  if(F) rfclose(F);
+  return(Result);
 }
 
 /** SeekFDI() ************************************************/
 /** Seek to given side/track/sector. Returns sector address **/
 /** on success or 0 on failure.                             **/
 /*************************************************************/
-byte *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID)
+uint8_t *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID)
 {
-  byte *P,*T;
-  int J;
+  uint8_t *P,*T;
+  int J,Deleted;
 
   /* Have to have disk mounted */
   if(!D||!D->Data) return(0);
+
+  /* May need to search for deleted sectors */
+  Deleted = (SectorID>=0) && (SectorID&SEEK_DELETED)? 0x80:0x00;
+  if(Deleted) SectorID&=~SEEK_DELETED;
 
   switch(D->Format)
   {
@@ -701,7 +994,12 @@ byte *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID)
     case FMT_FDI:
     case FMT_MGT:
     case FMT_IMG:
+    case FMT_DDP:
+    case FMT_SAD:
     case FMT_CPCDSK:
+    case FMT_SAMDSK:
+    case FMT_ADMDSK:
+    case FMT_MSXDSK:
     case FMT_SF7000:
       /* Track directory */
       P = FDI_DIR(D->Data);
@@ -709,7 +1007,10 @@ byte *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID)
       for(J=Track*D->Sides+Side%D->Sides;J;--J) P+=(FDI_SECTORS(P)+1)*7;
       /* Find sector entry */
       for(J=FDI_SECTORS(P),T=P+7;J;--J,T+=7)
-        if((T[0]==TrackID)&&(T[1]==SideID)&&(T[2]==SectorID)) break;
+        if((T[0]==TrackID)||(TrackID<0))
+          if((T[1]==SideID)||(SideID<0))
+            if(((T[2]==SectorID)&&((T[4]&0x80)==Deleted))||(SectorID<0))
+              break;
       /* Fall out if not found */
       if(!J) return(0);
       /* FDI stores a header for each sector */
@@ -727,5 +1028,38 @@ byte *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID)
 
   /* Unknown format */
   return(0);
+}
+
+/** LinearFDI() **********************************************/
+/** Seek to given sector by its linear number. Returns      **/
+/** sector address on success or 0 on failure.              **/
+/*************************************************************/
+uint8_t *LinearFDI(FDIDisk *D,int SectorN)
+{
+  if(!D->Sectors || !D->Sides || (SectorN<0)) return(0);
+  else
+  {
+    int Sector = SectorN % D->Sectors;
+    int Track  = SectorN / D->Sectors / D->Sides;
+    int Side   = (SectorN / D->Sectors) % D->Sides;
+    return(SeekFDI(D,Side,Track,Side,Track,Sector+1));
+  }
+}
+
+/** FormatFDI() ***********************************************/
+/** Allocate memory and create new standard disk image for a **/
+/** given format. Returns disk data pointer on success, 0 on **/
+/** failure.                                                 **/
+/**************************************************************/
+uint8_t *FormatFDI(FDIDisk *D,int Format)
+{
+  if((Format<0) || (Format>=sizeof(Formats)/sizeof(Formats[0]))) return(0);
+
+  return(NewFDI(D,
+    Formats[Format].Sides,
+    Formats[Format].Tracks,
+    Formats[Format].Sectors,
+    Formats[Format].SecSize
+  ));
 }
 

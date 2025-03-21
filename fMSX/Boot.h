@@ -5,13 +5,13 @@
 /** This file contains MSX boot sector image used to create **/
 /** new disk images during FORMAT operation.                **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1994-2014                 **/
+/** Copyright (C) Marat Fayzullin 1994-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 
-static byte BootBlock[] =
+static uint8_t BootBlock[] =
 {
   0xEB,0xFE,0x90,0x56,0x46,0x42,0x2D,0x31,0x39,0x38,0x39,0x00,0x02,0x02,0x01,0x00,
   0x02,0x70,0x00,0xA0,0x05,0xF9,0x03,0x00,0x09,0x00,0x02,0x00,0x00,0x00,0xD0,0xED,

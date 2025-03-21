@@ -5,7 +5,7 @@
 /** This file contains emulation for the SCC sound chip     **/
 /** produced by Konami.                                     **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1996-2014                 **/
+/** Copyright (C) Marat Fayzullin 1996-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -19,7 +19,7 @@
 /** Reset the sound chip and use sound channels from the    **/
 /** one given in First.                                     **/
 /*************************************************************/
-void ResetSCC(register SCC *D,int First)
+void ResetSCC(SCC *D,int First)
 {
   int J;
 
@@ -43,7 +43,7 @@ void ResetSCC(register SCC *D,int First)
 /** Call this function to read contents of the generic SCC  **/
 /** sound chip registers.                                   **/
 /*************************************************************/
-byte ReadSCC(register SCC *D,register byte R)
+uint8_t ReadSCC(SCC *D,uint8_t R)
 {
   return(R<0x80? D->R[R]:0xFF);
 }
@@ -52,7 +52,7 @@ byte ReadSCC(register SCC *D,register byte R)
 /** Call this function to read contents of the newer SCC+   **/
 /** sound chip registers.                                   **/
 /*************************************************************/
-byte ReadSCCP(register SCC *D,register byte R)
+uint8_t ReadSCCP(SCC *D,uint8_t R)
 {
   return(R<0xA0? D->R[R]:0xFF);
 }
@@ -61,7 +61,7 @@ byte ReadSCCP(register SCC *D,register byte R)
 /** Call this function to output a value V into the generic **/
 /** SCC sound chip.                                         **/
 /*************************************************************/
-void WriteSCC(register SCC *D,register byte R,register byte V)
+void WriteSCC(SCC *D,uint8_t R,uint8_t V)
 {
   /* Prevent rollover */
   if(R>=0xE0) return;
@@ -77,10 +77,10 @@ void WriteSCC(register SCC *D,register byte R,register byte V)
 /** Call this function to output a value V into the newer   **/
 /** SCC+ sound chip.                                        **/
 /*************************************************************/
-void WriteSCCP(register SCC *D,register byte R,register byte V)
+void WriteSCCP(SCC *D,uint8_t R,uint8_t V)
 {
-  register int J;
-  register byte I;
+  int J;
+  uint8_t I;
 
   /* Exit if no change */
   if(V==D->R[R]) return;
@@ -99,6 +99,7 @@ void WriteSCCP(register SCC *D,register byte R,register byte V)
     R&=0x0F;
     switch(R)
     {
+      // set frequency
       case 0: case 1: case 2: case 3: case 4:
       case 5: case 6: case 7: case 8: case 9:
         /* Exit if the channel is silenced */
@@ -115,6 +116,7 @@ void WriteSCCP(register SCC *D,register byte R,register byte V)
         D->Changed|=1<<R;
         break;
 
+      // set volume
       case 10: case 11: case 12: case 13: case 14:
         /* Compute channel number */
         R-=10;
@@ -124,6 +126,7 @@ void WriteSCCP(register SCC *D,register byte R,register byte V)
         D->Changed|=(1<<R)&I;
         break;
 
+      // on/off bitmask
       case 15:
         /* Find changed channels */
         R=(V^I)&0x1F;
@@ -154,6 +157,7 @@ void WriteSCCP(register SCC *D,register byte R,register byte V)
     /* Write data to SCC */
     D->R[R]=V;
     /* Wrong register, do nothing */
+    /* note: fMSX ignores the deform register (98C0-98DF, B8C0-B8DF) */
     if(R>=0xA0) return;
     /* Mark channel waveform as changed */
     D->WChanged|=1<<(R>>5);
@@ -169,9 +173,9 @@ void WriteSCCP(register SCC *D,register byte R,register byte V)
 /** should be SCC_SYNC/SCC_ASYNC to set/reset sync, or      **/
 /** SCC_FLUSH to leave sync mode as it is.                  **/
 /*************************************************************/
-void SyncSCC(register SCC *D,register byte Sync)
+void SyncSCC(SCC *D,uint8_t Sync)
 {
-  register int J,I;
+  int J,I;
 
   if(Sync!=SCC_FLUSH) D->Sync=Sync;
 

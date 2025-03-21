@@ -5,7 +5,7 @@
 /** This file contains declarations relevant to emulation   **/
 /** of Z80 CPU.                                             **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1994-2017                 **/
+/** Copyright (C) Marat Fayzullin 1994-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -13,12 +13,11 @@
 #ifndef Z80_H
 #define Z80_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-                               /* Compilation options:       */
-/* #define DEBUG */            /* Compile debugging version  */
 
                                /* LoopZ80() may return:      */
 #define INT_RST00   0x00C7     /* RST 00h                    */
@@ -52,48 +51,39 @@ extern "C" {
 #define IFF_HALT    0x80       /* 1: CPU HALTed              */
 
 /** Simple Datatypes *****************************************/
-/** NOTICE: sizeof(byte)=1 and sizeof(word)=2               **/
+/** NOTICE: sizeof(uint8_t)=1 and sizeof(uint16_t)=2        **/
 /*************************************************************/
-#ifndef BYTE_TYPE_DEFINED
-#define BYTE_TYPE_DEFINED
-typedef unsigned char byte;
-#endif
-#ifndef WORD_TYPE_DEFINED
-#define WORD_TYPE_DEFINED
-typedef unsigned short word;
-#endif
 typedef signed char offset;
 
 /** Structured Datatypes *************************************/
 /** NOTICE: #define MSB_FIRST for machines where most       **/
-/**         signifcant byte goes first.                     **/
+/**         significant byte goes first                     **/
 /*************************************************************/
 typedef union
 {
 #ifdef MSB_FIRST
-  struct { byte h,l; } B;
+  struct { uint8_t h,l; } B;
 #else
-  struct { byte l,h; } B;
+  struct { uint8_t l,h; } B;
 #endif
-  word W;
+  uint16_t W;
 } pair;
 
 typedef struct
 {
   pair AF,BC,DE,HL,IX,IY,PC,SP;       /* Main registers      */
   pair AF1,BC1,DE1,HL1;               /* Shadow registers    */
-  byte IFF,I;                         /* Interrupt registers */
-  byte R;                             /* Refresh register    */
+  uint8_t IFF,I;                      /* Interrupt registers */
+  uint8_t R;                             /* Refresh register    */
 
   int IPeriod,ICount; /* Set IPeriod to number of CPU cycles */
                       /* between calls to LoopZ80()          */
   int IBackup;        /* Private, don't touch                */
-  word IRequest;      /* Set to address of pending IRQ       */
-  byte IAutoReset;    /* Set to 1 to autom. reset IRequest   */
-  byte TrapBadOps;    /* Set to 1 to warn of illegal opcodes */
-  word Trap;          /* Set Trap to address to trace from   */
-  byte Trace;         /* Set Trace=1 to start tracing        */
-  void *User;         /* Arbitrary user data (ID,RAM*,etc.)  */
+  uint16_t IRequest;  /* Set to address of pending IRQ       */
+  uint8_t IAutoReset; /* Set to 1 to autom. reset IRequest   */
+  uint16_t Trap;      /* Set Trap to address to trace from   */
+  uint8_t Trace;      /* Set Trace=1 to start tracing        */
+  unsigned int User;  /* Arbitrary user data (ID,RAM*,etc.)  */
 } Z80;
 
 /** ResetZ80() ***********************************************/
@@ -101,7 +91,7 @@ typedef struct
 /** starting execution with RunZ80(). It sets registers to  **/
 /** their initial values.                                   **/
 /*************************************************************/
-void ResetZ80(register Z80 *R);
+void ResetZ80(Z80 *R);
 
 /** ExecZ80() ************************************************/
 /** This function will execute given number of Z80 cycles.  **/
@@ -109,37 +99,37 @@ void ResetZ80(register Z80 *R);
 /** negative, and current register values in R.             **/
 /*************************************************************/
 #ifdef EXECZ80
-int ExecZ80(register Z80 *R,register int RunCycles);
+int ExecZ80(Z80 *R,int RunCycles);
 #endif
 
 /** IntZ80() *************************************************/
 /** This function will generate interrupt of given vector.  **/
 /*************************************************************/
-void IntZ80(register Z80 *R,register word Vector);
+void IntZ80(Z80 *R,uint16_t Vector);
 
 /** RunZ80() *************************************************/
-/** This function will run Z80 code until an LoopZ80() call **/
+/** This function will run Z80 code until a LoopZ80() call  **/
 /** returns INT_QUIT. It will return the PC at which        **/
 /** emulation stopped, and current register values in R.    **/
 /*************************************************************/
 #ifndef EXECZ80
-word RunZ80(register Z80 *R);
+uint16_t RunZ80(Z80 *R);
 #endif
 
 /** RdZ80()/WrZ80() ******************************************/
 /** These functions are called when access to RAM occurs.   **/
 /** They allow to control memory access.                    **/
 /************************************ TO BE WRITTEN BY USER **/
-void WrZ80(register word Addr,register byte Value);
-byte RdZ80(register word Addr);
+void WrZ80(uint16_t Addr,uint8_t Value);
+uint8_t RdZ80(uint16_t Addr);
 
 /** InZ80()/OutZ80() *****************************************/
 /** Z80 emulation calls these functions to read/write from  **/
 /** I/O ports. There can be 65536 I/O ports, but only first **/
 /** 256 are usually used.                                   **/
 /************************************ TO BE WRITTEN BY USER **/
-void OutZ80(register word Port,register byte Value);
-byte InZ80(register word Port);
+void OutZ80(uint16_t Port,uint8_t Value);
+uint8_t InZ80(uint16_t Port);
 
 /** PatchZ80() ***********************************************/
 /** Z80 emulation calls this function when it encounters a  **/
@@ -149,7 +139,7 @@ byte InZ80(register word Port);
 /** macro for no patching.                                  **/
 /************************************ TO BE WRITTEN BY USER **/
 #ifdef PATCH_Z80
-void PatchZ80(register Z80 *R);
+void PatchZ80(Z80 *R);
 #else
 #define PatchZ80(R)
 #endif
@@ -161,7 +151,7 @@ void PatchZ80(register Z80 *R);
 /** if DebugZ80() returns 0.                                **/
 /*************************************************************/
 #ifdef DEBUG
-byte DebugZ80(register Z80 *R);
+uint8_t DebugZ80(Z80 *R);
 #endif
 
 /** LoopZ80() ************************************************/
@@ -171,7 +161,7 @@ byte DebugZ80(register Z80 *R);
 /** (0x0038, 0x0066, etc.) or INT_NONE for no interrupt.    **/
 /** Return INT_QUIT to exit the emulation loop.             **/
 /************************************ TO BE WRITTEN BY USER **/
-word LoopZ80(register Z80 *R);
+uint16_t LoopZ80(Z80 *R);
 
 /** JumpZ80() ************************************************/
 /** Z80 emulation calls this function when it executes a    **/
@@ -181,7 +171,7 @@ word LoopZ80(register Z80 *R);
 #ifndef JUMPZ80
 #define JumpZ80(PC)
 #else
-void JumpZ80(word PC);
+void JumpZ80(uint16_t PC);
 #endif
 
 #ifdef __cplusplus

@@ -5,7 +5,7 @@
 /** This file contains implementation for the V9938 special **/
 /** graphical operations.                                   **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1994-2014                 **/
+/** Copyright (C) Marat Fayzullin 1994-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -29,8 +29,10 @@
 #include "V9938.h"
 #include <string.h>
 
+extern retro_log_printf_t log_cb;
+
 /*************************************************************/
-/** Other usefull defines                                   **/
+/** Other useful defines                                    **/
 /*************************************************************/
 #define VDP_VRMP5(X, Y) (VRAM + ((Y&1023)<<7) + ((X&255)>>1))
 #define VDP_VRMP6(X, Y) (VRAM + ((Y&1023)<<7) + ((X&511)>>2))
@@ -109,41 +111,41 @@ static struct {
   int NX,NY;
   int MX;
   int ASX,ADX,ANX;
-  byte CL;
-  byte LO;
-  byte CM;
+  uint8_t CL;
+  uint8_t LO;
+  uint8_t CM;
 } MMC;
 
 /*************************************************************/
 /** Function prototypes                                     **/
 /*************************************************************/
-static byte *VDPVRMP(register byte M, register int X, register int Y);
+static uint8_t *VDPVRMP(uint8_t M, int X, int Y);
 
-static byte VDPpoint5(register int SX, register int SY);
-static byte VDPpoint6(register int SX, register int SY);
-static byte VDPpoint7(register int SX, register int SY);
-static byte VDPpoint8(register int SX, register int SY);
+static uint8_t VDPpoint5(int SX, int SY);
+static uint8_t VDPpoint6(int SX, int SY);
+static uint8_t VDPpoint7(int SX, int SY);
+static uint8_t VDPpoint8(int SX, int SY);
 
-static byte VDPpoint(register byte SM, 
-                     register int SX, register int SY);
+static uint8_t VDPpoint(uint8_t SM, 
+                     int SX, int SY);
 
-static void VDPpsetlowlevel(register byte *P, register byte CL,
-                            register byte M, register byte OP);
+static void VDPpsetlowlevel(uint8_t *P, uint8_t CL,
+                            uint8_t M, uint8_t OP);
 
-static void VDPpset5(register int DX, register int DY,
-                     register byte CL, register byte OP);
-static void VDPpset6(register int DX, register int DY,
-                     register byte CL, register byte OP);
-static void VDPpset7(register int DX, register int DY,
-                     register byte CL, register byte OP);
-static void VDPpset8(register int DX, register int DY,
-                     register byte CL, register byte OP);
+static void VDPpset5(int DX, int DY,
+                     uint8_t CL, uint8_t OP);
+static void VDPpset6(int DX, int DY,
+                     uint8_t CL, uint8_t OP);
+static void VDPpset7(int DX, int DY,
+                     uint8_t CL, uint8_t OP);
+static void VDPpset8(int DX, int DY,
+                     uint8_t CL, uint8_t OP);
 
-static void VDPpset(register byte SM,
-                    register int DX, register int DY,
-                    register byte CL, register byte OP);
+static void VDPpset(uint8_t SM,
+                    int DX, int DY,
+                    uint8_t CL, uint8_t OP);
 
-static int GetVdpTimingValue(register int *);
+static int GetVdpTimingValue(int *);
 
 static void SrchEngine(void);
 static void LineEngine(void);
@@ -156,12 +158,10 @@ static void HmmmEngine(void);
 static void YmmmEngine(void);
 static void HmmcEngine(void);
 
-void ReportVdpCommand(register byte Op);
-
 /*************************************************************/
 /** Variables visible only in this module                   **/
 /*************************************************************/
-static byte Mask[4] = { 0x0F,0x03,0x0F,0xFF };
+static uint8_t Mask[4] = { 0x0F,0x03,0x0F,0xFF };
 static int  PPB[4]  = { 2,4,2,1 };
 static int  PPL[4]  = { 256,512,512,256 };
 static int  VdpOpsCnt=1;
@@ -188,7 +188,7 @@ static int lmmm_timing[8]={ 1160, 1599, 1160, 1172,
 /** VDPVRMP() **********************************************/
 /** Calculate addr of a pixel in vram                       **/
 /*************************************************************/
-INLINE byte *VDPVRMP(byte M,int X,int Y)
+INLINE uint8_t *VDPVRMP(uint8_t M,int X,int Y)
 {
   switch(M)
   {
@@ -204,7 +204,7 @@ INLINE byte *VDPVRMP(byte M,int X,int Y)
 /** VDPpoint5() ***********************************************/
 /** Get a pixel on screen 5                                 **/
 /*************************************************************/
-INLINE byte VDPpoint5(int SX, int SY)
+INLINE uint8_t VDPpoint5(int SX, int SY)
 {
   return (*VDP_VRMP5(SX, SY) >>
           (((~SX)&1)<<2)
@@ -214,7 +214,7 @@ INLINE byte VDPpoint5(int SX, int SY)
 /** VDPpoint6() ***********************************************/
 /** Get a pixel on screen 6                                 **/
 /*************************************************************/
-INLINE byte VDPpoint6(int SX, int SY)
+INLINE uint8_t VDPpoint6(int SX, int SY)
 {
   return (*VDP_VRMP6(SX, SY) >>
           (((~SX)&3)<<1)
@@ -224,7 +224,7 @@ INLINE byte VDPpoint6(int SX, int SY)
 /** VDPpoint7() ***********************************************/
 /** Get a pixel on screen 7                                 **/
 /*************************************************************/
-INLINE byte VDPpoint7(int SX, int SY)
+INLINE uint8_t VDPpoint7(int SX, int SY)
 {
   return (*VDP_VRMP7(SX, SY) >>
           (((~SX)&1)<<2)
@@ -234,7 +234,7 @@ INLINE byte VDPpoint7(int SX, int SY)
 /** VDPpoint8() ***********************************************/
 /** Get a pixel on screen 8                                 **/
 /*************************************************************/
-INLINE byte VDPpoint8(int SX, int SY)
+INLINE uint8_t VDPpoint8(int SX, int SY)
 {
   return *VDP_VRMP8(SX, SY);
 }
@@ -242,7 +242,7 @@ INLINE byte VDPpoint8(int SX, int SY)
 /** VDPpoint() ************************************************/
 /** Get a pixel on a screen                                 **/
 /*************************************************************/
-INLINE byte VDPpoint(byte SM, int SX, int SY)
+INLINE uint8_t VDPpoint(uint8_t SM, int SX, int SY)
 {
   switch(SM)
   {
@@ -259,7 +259,7 @@ INLINE byte VDPpoint(byte SM, int SX, int SY)
 /** Low level function to set a pixel on a screen           **/
 /** Make it inline to make it fast                          **/
 /*************************************************************/
-INLINE void VDPpsetlowlevel(byte *P, byte CL, byte M, byte OP)
+INLINE void VDPpsetlowlevel(uint8_t *P, uint8_t CL, uint8_t M, uint8_t OP)
 {
   switch (OP)
   {
@@ -279,9 +279,9 @@ INLINE void VDPpsetlowlevel(byte *P, byte CL, byte M, byte OP)
 /** VDPpset5() ***********************************************/
 /** Set a pixel on screen 5                                 **/
 /*************************************************************/
-INLINE void VDPpset5(int DX, int DY, byte CL, byte OP)
+INLINE void VDPpset5(int DX, int DY, uint8_t CL, uint8_t OP)
 {
-  register byte SH = ((~DX)&1)<<2;
+  uint8_t SH = ((~DX)&1)<<2;
 
   VDPpsetlowlevel(VDP_VRMP5(DX, DY),
                   CL << SH, ~(15<<SH), OP);
@@ -290,9 +290,9 @@ INLINE void VDPpset5(int DX, int DY, byte CL, byte OP)
 /** VDPpset6() ***********************************************/
 /** Set a pixel on screen 6                                 **/
 /*************************************************************/
-INLINE void VDPpset6(int DX, int DY, byte CL, byte OP)
+INLINE void VDPpset6(int DX, int DY, uint8_t CL, uint8_t OP)
 {
-  register byte SH = ((~DX)&3)<<1;
+  uint8_t SH = ((~DX)&3)<<1;
 
   VDPpsetlowlevel(VDP_VRMP6(DX, DY),
                   CL << SH, ~(3<<SH), OP);
@@ -301,9 +301,9 @@ INLINE void VDPpset6(int DX, int DY, byte CL, byte OP)
 /** VDPpset7() ***********************************************/
 /** Set a pixel on screen 7                                 **/
 /*************************************************************/
-INLINE void VDPpset7(int DX, int DY, byte CL, byte OP)
+INLINE void VDPpset7(int DX, int DY, uint8_t CL, uint8_t OP)
 {
-  register byte SH = ((~DX)&1)<<2;
+  uint8_t SH = ((~DX)&1)<<2;
 
   VDPpsetlowlevel(VDP_VRMP7(DX, DY),
                   CL << SH, ~(15<<SH), OP);
@@ -312,7 +312,7 @@ INLINE void VDPpset7(int DX, int DY, byte CL, byte OP)
 /** VDPpset8() ***********************************************/
 /** Set a pixel on screen 8                                 **/
 /*************************************************************/
-INLINE void VDPpset8(int DX, int DY, byte CL, byte OP)
+INLINE void VDPpset8(int DX, int DY, uint8_t CL, uint8_t OP)
 {
   VDPpsetlowlevel(VDP_VRMP8(DX, DY),
                   CL, 0, OP);
@@ -321,7 +321,7 @@ INLINE void VDPpset8(int DX, int DY, byte CL, byte OP)
 /** VDPpset() ************************************************/
 /** Set a pixel on a screen                                 **/
 /*************************************************************/
-INLINE void VDPpset(byte SM, int DX, int DY, byte CL, byte OP)
+INLINE void VDPpset(uint8_t SM, int DX, int DY, uint8_t CL, uint8_t OP)
 {
   switch (SM) {
     case 0: VDPpset5(DX, DY, CL, OP); break;
@@ -334,7 +334,7 @@ INLINE void VDPpset(byte SM, int DX, int DY, byte CL, byte OP)
 /** GetVdpTimingValue() **************************************/
 /** Get timing value for a certain VDP command              **/
 /*************************************************************/
-static int GetVdpTimingValue(register int *timing_values)
+static int GetVdpTimingValue(int *timing_values)
 {
   return(timing_values[((VDP[1]>>6)&1)|(VDP[8]&2)|((VDP[9]<<1)&4)]);
 }
@@ -344,16 +344,13 @@ static int GetVdpTimingValue(register int *timing_values)
 /*************************************************************/
 void SrchEngine(void)
 {
-  register int SX=MMC.SX;
-  register int SY=MMC.SY;
-  register int TX=MMC.TX;
-  register int ANX=MMC.ANX;
-  register byte CL=MMC.CL;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(srch_timing);
-  cnt = VdpOpsCnt;
+  int SX=MMC.SX;
+  int SY=MMC.SY;
+  int TX=MMC.TX;
+  int ANX=MMC.ANX;
+  uint8_t CL=MMC.CL;
+  int delta = GetVdpTimingValue(srch_timing);
+  int cnt = VdpOpsCnt;
 
 #define pre_srch \
     pre_loop \
@@ -398,21 +395,18 @@ void SrchEngine(void)
 /*************************************************************/
 void LineEngine(void)
 {
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NX=MMC.NX;
-  register int NY=MMC.NY;
-  register int ASX=MMC.ASX;
-  register int ADX=MMC.ADX;
-  register byte CL=MMC.CL;
-  register byte LO=MMC.LO;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(line_timing);
-  cnt = VdpOpsCnt;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NX=MMC.NX;
+  int NY=MMC.NY;
+  int ASX=MMC.ASX;
+  int ADX=MMC.ADX;
+  uint8_t CL=MMC.CL;
+  uint8_t LO=MMC.LO;
+  int delta = GetVdpTimingValue(line_timing);
+  int cnt = VdpOpsCnt;
 
 #define post_linexmaj(MX) \
       DX+=TX; \
@@ -480,21 +474,18 @@ void LineEngine(void)
 /*************************************************************/
 void LmmvEngine(void)
 {
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NX=MMC.NX;
-  register int NY=MMC.NY;
-  register int ADX=MMC.ADX;
-  register int ANX=MMC.ANX;
-  register byte CL=MMC.CL;
-  register byte LO=MMC.LO;
-  register int cnt;
-  register int delta;
-
-  delta = GetVdpTimingValue(lmmv_timing);
-  cnt = VdpOpsCnt;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NX=MMC.NX;
+  int NY=MMC.NY;
+  int ADX=MMC.ADX;
+  int ANX=MMC.ANX;
+  uint8_t CL=MMC.CL;
+  uint8_t LO=MMC.LO;
+  int delta = GetVdpTimingValue(lmmv_timing);
+  int cnt = VdpOpsCnt;
 
   switch (ScrMode) {
     case 5: pre_loop VDPpset5(ADX, DY, CL, LO); post__x_y(256)
@@ -531,23 +522,20 @@ void LmmvEngine(void)
 /*************************************************************/
 void LmmmEngine(void)
 {
-  register int SX=MMC.SX;
-  register int SY=MMC.SY;
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NX=MMC.NX;
-  register int NY=MMC.NY;
-  register int ASX=MMC.ASX;
-  register int ADX=MMC.ADX;
-  register int ANX=MMC.ANX;
-  register byte LO=MMC.LO;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(lmmm_timing);
-  cnt = VdpOpsCnt;
+  int SX=MMC.SX;
+  int SY=MMC.SY;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NX=MMC.NX;
+  int NY=MMC.NY;
+  int ASX=MMC.ASX;
+  int ADX=MMC.ADX;
+  int ANX=MMC.ANX;
+  uint8_t LO=MMC.LO;
+  int delta = GetVdpTimingValue(lmmm_timing);
+  int cnt = VdpOpsCnt;
 
   switch (ScrMode) {
     case 5: pre_loop VDPpset5(ADX, DY, VDPpoint5(ASX, SY), LO); post_xxyy(256)
@@ -591,10 +579,10 @@ void LmmmEngine(void)
 /** LmcmEngine() *********************************************/
 /** Vram -> CPU                                             **/
 /*************************************************************/
-void LmcmEngine()
+void LmcmEngine(void)
 {
-  if ((VDPStatus[2]&0x80)!=0x80) {
-
+  if ((VDPStatus[2]&0x80)!=0x80)
+  {
     VDPStatus[7]=VDP[44]=VDP_POINT(ScrMode-5, MMC.ASX, MMC.SY);
     VdpOpsCnt-=GetVdpTimingValue(lmmv_timing);
     VDPStatus[2]|=0x80;
@@ -624,7 +612,7 @@ void LmcmEngine()
 void LmmcEngine(void)
 {
   if ((VDPStatus[2]&0x80)!=0x80) {
-    register byte SM=ScrMode-5;
+    uint8_t SM=ScrMode-5;
 
     VDPStatus[7]=VDP[44]&=Mask[SM];
     VDP_PSET(SM, MMC.ADX, MMC.DY, VDP[44], MMC.LO);
@@ -655,20 +643,17 @@ void LmmcEngine(void)
 /*************************************************************/
 void HmmvEngine(void)
 {
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NX=MMC.NX;
-  register int NY=MMC.NY;
-  register int ADX=MMC.ADX;
-  register int ANX=MMC.ANX;
-  register byte CL=MMC.CL;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(hmmv_timing);
-  cnt = VdpOpsCnt;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NX=MMC.NX;
+  int NY=MMC.NY;
+  int ADX=MMC.ADX;
+  int ANX=MMC.ANX;
+  uint8_t CL=MMC.CL;
+  int delta = GetVdpTimingValue(hmmv_timing);
+  int cnt = VdpOpsCnt;
 
   switch (ScrMode) {
     case 5: pre_loop *VDP_VRMP5(ADX, DY) = CL; post__x_y(256)
@@ -705,22 +690,19 @@ void HmmvEngine(void)
 /*************************************************************/
 void HmmmEngine(void)
 {
-  register int SX=MMC.SX;
-  register int SY=MMC.SY;
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NX=MMC.NX;
-  register int NY=MMC.NY;
-  register int ASX=MMC.ASX;
-  register int ADX=MMC.ADX;
-  register int ANX=MMC.ANX;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(hmmm_timing);
-  cnt = VdpOpsCnt;
+  int SX=MMC.SX;
+  int SY=MMC.SY;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NX=MMC.NX;
+  int NY=MMC.NY;
+  int ASX=MMC.ASX;
+  int ADX=MMC.ADX;
+  int ANX=MMC.ANX;
+  int delta = GetVdpTimingValue(hmmm_timing);
+  int cnt = VdpOpsCnt;
 
   switch (ScrMode) {
     case 5: pre_loop *VDP_VRMP5(ADX, DY) = *VDP_VRMP5(ASX, SY); post_xxyy(256)
@@ -766,18 +748,15 @@ void HmmmEngine(void)
 /*************************************************************/
 void YmmmEngine(void)
 {
-  register int SY=MMC.SY;
-  register int DX=MMC.DX;
-  register int DY=MMC.DY;
-  register int TX=MMC.TX;
-  register int TY=MMC.TY;
-  register int NY=MMC.NY;
-  register int ADX=MMC.ADX;
-  register int cnt;
-  register int delta;
- 
-  delta = GetVdpTimingValue(ymmm_timing);
-  cnt = VdpOpsCnt;
+  int SY=MMC.SY;
+  int DX=MMC.DX;
+  int DY=MMC.DY;
+  int TX=MMC.TX;
+  int TY=MMC.TY;
+  int NY=MMC.NY;
+  int ADX=MMC.ADX;
+  int delta = GetVdpTimingValue(ymmm_timing);
+  int cnt = VdpOpsCnt;
 
   switch (ScrMode) {
     case 5: pre_loop *VDP_VRMP5(ADX, DY) = *VDP_VRMP5(ADX, SY); post__xyy(256)
@@ -849,7 +828,7 @@ void HmmcEngine(void)
 /** VDPWrite() ***********************************************/
 /** Use this function to transfer pixel(s) from CPU to VDP. **/
 /*************************************************************/
-void VDPWrite(byte V)
+void VDPWrite(uint8_t V)
 {
   VDPStatus[2]&=0x7F;
   VDPStatus[7]=VDP[44]=V;
@@ -859,56 +838,19 @@ void VDPWrite(byte V)
 /** VDPRead() ************************************************/
 /** Use this function to transfer pixel(s) from VDP to CPU. **/
 /*************************************************************/
-byte VDPRead(void)
+uint8_t VDPRead(void)
 {
   VDPStatus[2]&=0x7F;
   if(VdpEngine&&(VdpOpsCnt>0)) VdpEngine();
   return(VDP[44]);
 }
 
-/** ReportVdpCommand() ***************************************/
-/** Report VDP Command to be executed                       **/
-/*************************************************************/
-void ReportVdpCommand(register byte Op)
-{
-  static char *Ops[16] =
-  {
-    "SET ","AND ","OR  ","XOR ","NOT ","NOP ","NOP ","NOP ",
-    "TSET","TAND","TOR ","TXOR","TNOT","NOP ","NOP ","NOP "
-  };
-  static char *Commands[16] =
-  {
-    " ABRT"," ????"," ????"," ????","POINT"," PSET"," SRCH"," LINE",
-    " LMMV"," LMMM"," LMCM"," LMMC"," HMMV"," HMMM"," YMMM"," HMMC"
-  };
-  register byte CL, CM, LO;
-  register int SX,SY, DX,DY, NX,NY;
-
-  /* Fetch arguments */
-  CL = VDP[44];
-  SX = (VDP[32]+((int)VDP[33]<<8)) & 511;
-  SY = (VDP[34]+((int)VDP[35]<<8)) & 1023;
-  DX = (VDP[36]+((int)VDP[37]<<8)) & 511;
-  DY = (VDP[38]+((int)VDP[39]<<8)) & 1023;
-  NX = (VDP[40]+((int)VDP[41]<<8)) & 1023;
-  NY = (VDP[42]+((int)VDP[43]<<8)) & 1023;
-  CM = Op>>4;
-  LO = Op&0x0F;
-
-  printf("V9938: Opcode %02Xh %s-%s (%d,%d)->(%d,%d),%d [%d,%d]%s\n",
-         Op, Commands[CM], Ops[LO],
-         SX,SY, DX,DY, CL, VDP[45]&0x04? -NX:NX,
-         VDP[45]&0x08? -NY:NY,
-         VDP[45]&0x70? " on ExtVRAM":""
-        );
-}
-
 /** VDPDraw() ************************************************/
 /** Perform a given V9938 operation Op.                     **/
 /*************************************************************/
-byte VDPDraw(byte Op)
+uint8_t VDPDraw(uint8_t Op)
 {
-  register int SM;
+  int SM;
 
   /* V9938 ops only work in SCREENs 5-8 */
   if (ScrMode<5)
@@ -920,9 +862,6 @@ byte VDPDraw(byte Op)
   if ((MMC.CM & 0x0C) != 0x0C && MMC.CM != 0)
     /* Dot operation: use only relevant bits of color */
     VDPStatus[7]=(VDP[44]&=Mask[SM]);
-
-  if(Verbose&0x02)
-    ReportVdpCommand(Op);
 
   switch(Op>>4) {
     case CM_ABRT:
@@ -976,7 +915,6 @@ byte VDPDraw(byte Op)
       VdpEngine=HmmcEngine;  
       break;
     default:
-      if(Verbose&0x02) printf("V9938: Unrecognized opcode %02Xh\n",Op);
         return(0);
   }
 
@@ -991,7 +929,7 @@ byte VDPDraw(byte Op)
   MMC.CL = VDP[44];
   MMC.LO = Op&0x0F;
 
-  /* Argument depends on byte or dot operation */
+  /* Argument depends on uint8_t or dot operation */
   if ((MMC.CM & 0x0C) == 0x0C) {
     MMC.TX = VDP[45]&0x04? -PPB[SM]:PPB[SM];
     MMC.NX = ((VDP[40]+((int)VDP[41]<<8)) & 1023)/PPB[SM];

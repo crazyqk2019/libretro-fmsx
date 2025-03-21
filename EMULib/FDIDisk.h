@@ -6,34 +6,49 @@
 /** disk images in various formats. The internal format is  **/
 /** always .FDI. See FDIDisk.c for the actual code.         **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2007-2014                 **/
+/** Copyright (C) Marat Fayzullin 2007-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 #ifndef FDIDISK_H
 #define FDIDISK_H
+
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+                              /* SaveFDI() result:           */
+#define FDI_SAVE_FAILED    0  /* Failed saving disk image    */
+#define FDI_SAVE_TRUNCATED 1  /* Truncated data while saving */
+#define FDI_SAVE_PADDED    2  /* Padded data while saving    */
+#define FDI_SAVE_OK        3  /* Succeeded saving disk image */
 
-#define FMT_AUTO   0
-#define FMT_IMG    1
-#define FMT_MGT    2
-#define FMT_TRD    3
-#define FMT_FDI    4
-#define FMT_SCL    5
-#define FMT_HOBETA 6
-#define FMT_DSK    7
-#define FMT_CPCDSK 8
-#define FMT_SF7000 9
+                           /* Supported disk image formats:  */
+#define FMT_AUTO   0       /* Determine format automatically */                   
+#define FMT_IMG    1       /* ZX Spectrum disk               */             
+#define FMT_MGT    2       /* ZX Spectrum disk, same as .DSK */             
+#define FMT_TRD    3       /* ZX Spectrum TRDOS disk         */
+#define FMT_FDI    4       /* Generic FDI image              */ 
+#define FMT_SCL    5       /* ZX Spectrum TRDOS disk         */
+#define FMT_HOBETA 6       /* ZX Spectrum HoBeta disk        */
+#define FMT_MSXDSK 7       /* MSX disk                       */          
+#define FMT_CPCDSK 8       /* CPC disk                       */          
+#define FMT_SF7000 9       /* Sega SF-7000 disk              */ 
+#define FMT_SAMDSK 10      /* Sam Coupe disk                 */    
+#define FMT_ADMDSK 11      /* Coleco Adam disk               */  
+#define FMT_DDP    12      /* Coleco Adam tape               */  
+#define FMT_SAD    13      /* Sam Coupe disk                 */
+#define FMT_DSK    14      /* Generic raw disk image         */
+#define FMT_MEMORY 15      /* In-memory (RetroArch SRAM)     */
 
-#define DataFDI(D) ((D)->Data+(D)->Data[10]+((int)((D)->Data[11])<<8))
+#define SEEK_DELETED (0x40000000)
 
-#ifndef BYTE_TYPE_DEFINED
-#define BYTE_TYPE_DEFINED
-typedef unsigned char byte;
-#endif
+#define NUM_FDI_DRIVES 4
+
+extern uint8_t* DiskData;
+extern int DiskSize;
 
 /** FDIDisk **************************************************/
 /** This structure contains all disk image information and  **/
@@ -41,17 +56,17 @@ typedef unsigned char byte;
 /*************************************************************/
 typedef struct
 {
-  byte Format;     /* Original disk format (FMT_*) */
+  uint8_t Format;     /* Original disk format (FMT_*) */
   int  Sides;      /* Sides per disk */
   int  Tracks;     /* Tracks per side */
   int  Sectors;    /* Sectors per track */
   int  SecSize;    /* Bytes per sector */
 
-  byte *Data;      /* Disk data */
+  uint8_t *Data;      /* Disk data */
   int  DataSize;   /* Disk data size */
 
-  byte Header[6];  /* Current header, result of SeekFDI() */
-  byte Verbose;    /* 1: Print debugging messages */
+  uint8_t Header[6];  /* Current header, result of SeekFDI() */
+  uint8_t Dirty;      /* 1: Data to be flushed */
 } FDIDisk;
 
 /** InitFDI() ************************************************/
@@ -69,7 +84,14 @@ void EjectFDI(FDIDisk *D);
 /** dimensions. Returns disk data pointer on success, 0 on  **/
 /** failure.                                                **/
 /*************************************************************/
-byte *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize);
+uint8_t *NewFDI(FDIDisk *D,int Sides,int Tracks,int Sectors,int SecSize);
+
+/** FormatFDI() ***********************************************/
+/** Allocate memory and create new standard disk image for a **/
+/** given format. Returns disk data pointer on success, 0 on **/
+/** failure.                                                 **/
+/**************************************************************/
+uint8_t *FormatFDI(FDIDisk *D,int Format);
 
 /** LoadFDI() ************************************************/
 /** Load a disk image from a given file, in a given format  **/
@@ -83,8 +105,10 @@ int LoadFDI(FDIDisk *D,const char *FileName,int Format);
 /** SaveFDI() ************************************************/
 /** Save a disk image to a given file, in a given format    **/
 /** (see FMT_* #defines). Use the original format when      **/
-/** when Format=FMT_AUTO. Returns format ID on success or   **/
-/** 0 on failure.                                           **/
+/** when Format=FMT_AUTO. Returns FDI_SAVE_OK on success,   **/
+/** FDI_SAVE_PADDED if any sectors were padded,             **/
+/** FDI_SAVE_TRUNCATED if any sectors were truncated,       **/
+/** FDI_SAVE_FAILED (0) if failed.                          **/
 /*************************************************************/
 int SaveFDI(FDIDisk *D,const char *FileName,int Format);
 
@@ -92,7 +116,13 @@ int SaveFDI(FDIDisk *D,const char *FileName,int Format);
 /** Seek to given side/track/sector. Returns sector address **/
 /** on success or 0 on failure.                             **/
 /*************************************************************/
-byte *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID);
+uint8_t *SeekFDI(FDIDisk *D,int Side,int Track,int SideID,int TrackID,int SectorID);
+
+/** LinearFDI() **********************************************/
+/** Seek to given sector by its linear number. Returns      **/
+/** sector address on success or 0 on failure.              **/
+/*************************************************************/
+uint8_t *LinearFDI(FDIDisk *D,int SectorN);
 
 #ifdef __cplusplus
 }

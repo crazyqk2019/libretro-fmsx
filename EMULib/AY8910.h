@@ -6,13 +6,16 @@
 /** produced by General Instruments, Yamaha, etc. See       **/
 /** AY8910.c for the actual code.                           **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1996-2014                 **/
+/** Copyright (C) Marat Fayzullin 1996-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 #ifndef AY8910_H
 #define AY8910_H
+
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,74 +25,71 @@ extern "C" {
 #define AY8910_ASYNC    0      /* Asynchronous emulation     */
 #define AY8910_SYNC     1      /* Synchronous emulation      */
 #define AY8910_FLUSH    2      /* Flush buffers only         */
-#define AY8910_DRUMS    0x80   /* Hit drums for noise chnls  */
-
-#ifndef BYTE_TYPE_DEFINED
-#define BYTE_TYPE_DEFINED
-typedef unsigned char byte;
-#endif
 
 /** AY8910 ***************************************************/
 /** This data structure stores AY8910 state.                **/
 /*************************************************************/
+#pragma pack(4)
 typedef struct
 {
-  byte R[16];                  /* PSG registers contents     */
+  uint8_t R[16];                  /* PSG registers contents     */
+
+  /* THESE VALUES ARE NOT USED BUT KEPT FOR BACKWARD COMPATIBILITY */
   int Freq[AY8910_CHANNELS];   /* Frequencies (0 for off)    */
   int Volume[AY8910_CHANNELS]; /* Volumes (0..255)           */
-  int Clock;                   /* Base clock used by PSG     */
+
+  int Clock;                   /* Base clock rate (Fin/16)   */
   int First;                   /* First used Sound() channel */
-  byte Changed;                /* Bitmap of changed channels */
-  byte Sync;                   /* AY8910_SYNC/AY8910_ASYNC   */
-  byte Latch;                  /* Latch for the register num */
-  int EPeriod;                 /* Envelope step in msecs     */
+  uint8_t Changed;                /* Bitmap of changed channels */
+  uint8_t Sync;                   /* AY8910_SYNC/AY8910_ASYNC   */
+  uint8_t Latch;                  /* Latch for the register num */
+  int EPeriod;                 /* Envelope step in microsecs */
   int ECount;                  /* Envelope step counter      */
   int EPhase;                  /* Envelope phase             */
 } AY8910;
+#pragma pack()
 
 /** Reset8910() **********************************************/
 /** Reset the sound chip and use sound channels from the    **/
 /** one given in First.                                     **/
 /*************************************************************/
-void Reset8910(register AY8910 *D,int ClockHz,int First);
+void Reset8910(AY8910 *D,int ClockHz,int First);
 
 /** Write8910() **********************************************/
 /** Call this function to output a value V into the sound   **/
 /** chip.                                                   **/
 /*************************************************************/
-void Write8910(register AY8910 *D,register byte R,register byte V);
+void Write8910(AY8910 *D,uint8_t R,uint8_t V);
 
 /** WrCtrl8910() *********************************************/
 /** Write a value V to the PSG Control Port.                **/
 /*************************************************************/
-void WrCtrl8910(AY8910 *D,byte V);
+void WrCtrl8910(AY8910 *D,uint8_t V);
 
 /** WrData8910() *********************************************/
 /** Write a value V to the PSG Data Port.                   **/
 /*************************************************************/
-void WrData8910(AY8910 *D,byte V);
+void WrData8910(AY8910 *D,uint8_t V);
 
 /** RdData8910() *********************************************/
 /** Read a value from the PSG Data Port.                    **/
 /*************************************************************/
-byte RdData8910(AY8910 *D);
+uint8_t RdData8910(AY8910 *D);
 
 /** Sync8910() ***********************************************/
 /** Flush all accumulated changes by issuing Sound() calls  **/
 /** and set the synchronization on/off. The second argument **/
 /** should be AY8910_SYNC/AY8910_ASYNC to set/reset sync,   **/
-/** or AY8910_FLUSH to leave sync mode as it is. To emulate **/
-/** noise channels with MIDI drums, OR second argument with **/
-/** AY8910_DRUMS.                                           **/
+/** or AY8910_FLUSH to leave sync mode as it is.            **/
 /*************************************************************/
-void Sync8910(register AY8910 *D,register byte Sync);
+void Sync8910(AY8910 *D,uint8_t Sync);
 
 /** Loop8910() ***********************************************/
 /** Call this function periodically to update volume        **/
-/** envelopes. Use mS to pass the time since the last call  **/
-/** of Loop8910() in milliseconds.                          **/
+/** envelopes. Use uSec to pass the time since the last     **/
+/** call of Loop8910() in microseconds.                     **/
 /*************************************************************/
-void Loop8910(register AY8910 *D,int mS);
+void Loop8910(AY8910 *D,int uSec);
 
 #ifdef __cplusplus
 }

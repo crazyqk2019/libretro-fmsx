@@ -5,7 +5,7 @@
 /** This file contains implementation for the main table of **/
 /** Z80 commands. It is included from Z80.c.                **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 1994-2017                 **/
+/** Copyright (C) Marat Fayzullin 1994-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
@@ -376,10 +376,4 @@ case DAA:
   break;
 
 default:
-  if(R->TrapBadOps)
-    printf
-    (
-      "[Z80 %lX] Unrecognized instruction: %02X at PC=%04X\n",
-      (long)R->User,OpZ80(R->PC.W-1),R->PC.W-1
-    );
   break;

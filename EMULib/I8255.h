@@ -6,20 +6,18 @@
 /** port interface (PPI) chip from Intel. See I8255.h for   **/
 /** the actual code.                                        **/
 /**                                                         **/
-/** Copyright (C) Marat Fayzullin 2001-2014                 **/
+/** Copyright (C) Marat Fayzullin 2001-2021                 **/
 /**     You are not allowed to distribute this software     **/
 /**     commercially. Please, notify me, if you make any    **/
 /**     changes to this file.                               **/
 /*************************************************************/
 #ifndef I8255_H
 #define I8255_H
+
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#ifndef BYTE_TYPE_DEFINED
-#define BYTE_TYPE_DEFINED
-typedef unsigned char byte;
 #endif
 
 /** I8255 ****************************************************/
@@ -27,28 +25,28 @@ typedef unsigned char byte;
 /*************************************************************/
 typedef struct
 {
-  byte R[4];         /* Registers    */
-  byte Rout[3];      /* Output ports */
-  byte Rin[3];       /* Input ports  */
+  uint8_t R[4];         /* Registers    */
+  uint8_t Rout[3];      /* Output ports */
+  uint8_t Rin[3];       /* Input ports  */
 } I8255;
 
 /** Reset8255 ************************************************/
 /** Reset the i8255 chip. Set all data to 0x00. Set all     **/
 /** ports to "input" mode.                                  **/
 /*************************************************************/
-void Reset8255(register I8255 *D);
+void Reset8255(I8255 *D);
 
 /** Write8255 ************************************************/
 /** Write value V into i8255 register A. Returns 0 when A   **/
 /** is out of range, 1 otherwise.                           **/
 /*************************************************************/
-byte Write8255(register I8255 *D,register byte A,register byte V);
+uint8_t Write8255(I8255 *D,uint8_t A,uint8_t V);
 
 /** Read8255 *************************************************/
 /** Read value from an i8255 register A. Returns 0 when A   **/
 /** is out of range.                                        **/
 /*************************************************************/
-byte Read8255(register I8255 *D,register byte A);
+uint8_t Read8255(I8255 *D,uint8_t A);
 
 #ifdef __cplusplus
 }
